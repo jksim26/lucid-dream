@@ -282,6 +282,10 @@ fn cmd_import(raw: Vec<String>) -> Result<(), String> {
 }
 
 fn hook(raw: Vec<String>) -> Result<(), String> {
+    // Inside a dream run: do not inject the index or log the dream as a session.
+    if std::env::var_os(dream::DREAMING_ENV).is_some() {
+        return Ok(());
+    }
     let args = Args::parse(raw, &["--url"], &[])?;
     let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
     match args.words.first().map(String::as_str) {

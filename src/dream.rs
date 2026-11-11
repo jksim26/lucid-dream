@@ -11,6 +11,9 @@ use crate::util::{git, Utc};
 const PROMPT: &str = include_str!("dream_prompt.md");
 const INDEX_LINE_LIMIT: usize = 200;
 
+/// Set for the agent that dream runs; `lucid-dream hook` does nothing when it is.
+pub const DREAMING_ENV: &str = "LUCID_DREAMING";
+
 /// Tools the default agent may use. It can edit files and move them; nothing else.
 const CLAUDE_TOOLS: [&str; 7] = [
     "Read",
@@ -147,6 +150,9 @@ fn run_agent(
         Command::new(program)
             .args(args)
             .current_dir(root)
+            // The dream is not a working session: this tells our own hooks,
+            // which the agent inherits from the user's settings, to stay out.
+            .env(DREAMING_ENV, "1")
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
