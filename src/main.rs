@@ -33,9 +33,12 @@ lucid-dream: one shared memory that every agent reads and dream tidies
 
 On the machine that holds the memory:
   lucid-dream init <dir>                        create a memory store (folders + git)
-  lucid-dream token add <agent> --root <dir>    issue an agent's token (shown once)
-  lucid-dream token list --root <dir>           list agents that have a token
+  lucid-dream token add <agent> [--label L] --root <dir>     issue a token (shown once)
+  lucid-dream token remove <agent> [--label L] --root <dir>  revoke a token
+  lucid-dream token list --root <dir>           list tokens as agent/label
   lucid-dream serve --root <dir> [--bind ADDR]  serve MCP over HTTP at /mcp
+  lucid-dream serve --root <dir> --bind ADDR --only <agent>/<label>
+                                                a door: accepts that one token only
   lucid-dream serve --root <dir> --stdio [--as <agent>]
   lucid-dream dream --root <dir> [--dry-run]    consolidate the inbox and commit
 
@@ -147,35 +150,39 @@ fn cmd_init(raw: Vec<String>) -> Result<(), String> {
 }
 
 fn cmd_token(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root"], &[])?;
+    let args = Args::parse(raw, &["--root", "--label"], &[])?;
     let file = tokens::path(args.store()?.root());
-    match args
-        .words
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
+    let label = args
+        .option("--label")
+        .unwrap_or_else(|| tokens::DEFAULT_LABEL.to_string());
+    let words: Vec<&str> = args.words.iter().map(String::as_str).collect();
+    match words.as_slice() {
         ["add", agent] => {
-            let token = Tokens::add(&file, agent)?;
-            eprintln!(
-                "token for {agent} (shown once; set it as LUCID_TOKEN on that agent's devices):"
-            );
+            let token = Tokens::add(&file, agent, &label)?;
+            eprintln!("token {agent}/{label} (shown once; give it only to that client):");
             println!("{token}");
             Ok(())
         }
+        ["remove", agent] => {
+            if Tokens::remove(&file, agent, &label)? {
+                println!("revoked {agent}/{label}");
+                Ok(())
+            } else {
+                Err(format!("no token {agent}/{label}"))
+            }
+        }
         ["list"] => {
-            for agent in Tokens::load(&file).map_err(|e| e.to_string())?.agents() {
-                println!("{agent}");
+            for (agent, label) in Tokens::load(&file).map_err(|e| e.to_string())?.entries() {
+                println!("{agent}/{label}");
             }
             Ok(())
         }
-        _ => Err("usage: lucid-dream token add <agent> | token list".into()),
+        _ => Err("usage: lucid-dream token add|remove <agent> [--label L] | token list".into()),
     }
 }
 
 fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root", "--bind", "--as"], &["--stdio"])?;
+    let args = Args::parse(raw, &["--root", "--bind", "--as", "--only"], &["--stdio"])?;
     let store = args.store()?;
     if args.switches.contains("--stdio") {
         let who = args
@@ -193,6 +200,13 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
     let addr: SocketAddr = bind
         .parse()
         .map_err(|_| format!("bad bind address: {bind}"))?;
+    // `--only claude/phone` makes this listener a door for that one token.
+    let only = args
+        .option("--only")
+        .map(|only| match only.split_once('/') {
+            Some((agent, label)) => (agent.to_string(), label.to_string()),
+            None => (only, tokens::DEFAULT_LABEL.to_string()),
+        });
     let tokens = tokens::path(store.root());
     http::serve(
         addr,
@@ -200,6 +214,7 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
             store,
             tokens,
             loopback: addr.ip().is_loopback(),
+            only,
         },
     )
 }

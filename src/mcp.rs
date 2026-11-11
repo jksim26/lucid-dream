@@ -473,7 +473,7 @@ mod tests {
     fn a_message_needs_a_known_recipient_once_tokens_exist() {
         let t = Temp::new();
         let s = t.store();
-        Tokens::add(&tokens::path(&t.0), "codex").unwrap();
+        Tokens::add(&tokens::path(&t.0), "codex", tokens::DEFAULT_LABEL).unwrap();
         let bad = call(
             &s,
             "claude",

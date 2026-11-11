@@ -78,6 +78,7 @@ over stdio instead.
 
 - Claude Code, with hooks: [clients/claude-code](clients/claude-code)
 - Codex: [clients/codex](clients/codex)
+- Claude app on phone, web or desktop: [clients/claude-app](clients/claude-app)
 - Grok: [clients/grok](clients/grok)
 
 The server offers eight tools:
@@ -93,6 +94,40 @@ The server offers eight tools:
 
 Reads refuse absolute paths, `..`, hidden files and symlinks that leave the
 store. Writes only ever add files to `inbox/`, `logs/` and `messages/`.
+
+## Tokens and doors
+
+An agent can hold several tokens, told apart by a label, so each client can be
+cut off on its own:
+
+```bash
+lucid-dream token add claude --label phone --root <memory dir>
+```
+
+```bash
+lucid-dream token list --root <memory dir>
+```
+
+```bash
+lucid-dream token remove claude --label phone --root <memory dir>
+```
+
+The main server is for your own devices on Tailscale. A client that lives in
+the cloud (the Claude app, Grok) gets a **door** instead: a second listener that
+accepts exactly one token, with its own tunnel in front.
+
+```bash
+lucid-dream serve --root <memory dir> --bind 127.0.0.1:7881 --only claude/phone
+```
+
+| Listener | Reached through | Accepts |
+| --- | --- | --- |
+| Main, port 7878 | Tailscale only | Any issued token |
+| Door for the Claude app, 7881 | Its own tunnel | `claude/phone` only |
+| Door for Grok, 7882 | Its own tunnel | `grok/default` only |
+
+Never point a tunnel at the main listener. A door never admits a caller without
+its token, and a device token that leaks does not open any door.
 
 ## Messages between agents
 

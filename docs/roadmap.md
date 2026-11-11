@@ -13,15 +13,18 @@ the server on the Windows PC and pointing each agent at it (see the README).
 - [x] **4. Dream job**: `lucid-dream dream`, run by hand and review the git diff, then schedule nightly
 - [x] **5. Import old memory**: `lucid-dream import` for CLAUDE.md files, auto memory folders, Obsidian notes
 - [x] **6. Codex access**: AGENTS.md rule + its own token ([clients/codex](../clients/codex))
-- [ ] **7. Grok (later)**: the xAI API can call a remote MCP server, but only one it can reach from
-  the internet; until there is a tunnel, give Grok the daily digest ([clients/grok](../clients/grok))
+- [x] **7. Grok**: its own door and tunnel for the xAI API, or the daily digest without one
+  ([clients/grok](../clients/grok)); not yet tried against the real API
 - [x] **8. Agent bridge** (added 2026-11-11): `send` and `messages` tools, so the agents
   talk to each other across sessions and devices, not only share memory
+- [x] **9. Doors for cloud clients** (added 2026-11-11): labelled, revocable tokens and
+  `serve --only`, so the Claude app and Grok each get their own token and tunnel
 
 Not done anywhere yet:
 
 - [ ] Run the server on the Windows PC and connect Claude on Windows
 - [ ] Connect the Mac, install the hooks, import old memory
+- [ ] Open the doors: start each one, put a tunnel in front, add the connector
 - [ ] Schedule the nightly dream after a week of reviewing its diffs by hand
 
 ## Voice rules
