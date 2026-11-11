@@ -1,0 +1,6 @@
+# Add to ~/.codex/config.toml. The token is read from the environment variable
+# named here, so it stays out of the file.
+
+[mcp_servers.lucid-dream]
+url = "http://<pc-name>:7878/mcp"
+bearer_token_env_var = "LUCID_TOKEN_CODEX"

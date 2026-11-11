@@ -4,13 +4,25 @@ Source: the Lucid Dream Roadmap board, https://claude.ai/artifact/A9MQA4ajBmiFMY
 
 ## Build order
 
-- [ ] **1. Repo + read server**: folder skeleton (done), MCP read tools (done), connect Claude on Windows
-- [ ] **2. Write tools + voices**: `remember()`, one token per agent, `source` + `said_by`, connect Mac
-- [ ] **3. Device hooks**: SessionStart loads the index, Stop sends a session summary
-- [ ] **4. Dream job**: run by hand, review the git diff, then schedule nightly
-- [ ] **5. Import old memory**: CLAUDE.md files, auto memory folders, Obsidian notes
-- [ ] **6. Codex access**: AGENTS.md rule + its own token
-- [ ] **7. Grok (later)**: digest file or direct MCP; verify Grok supports MCP first
+Everything below is built and tested on a Mac. What is left is deployment: running
+the server on the Windows PC and pointing each agent at it (see the README).
+
+- [x] **1. Repo + read server**: folder skeleton, MCP read tools
+- [x] **2. Write tools + voices**: `remember` and `log`, one token per agent, `source` + `said_by`
+- [x] **3. Device hooks**: SessionStart loads the index, Stop sends a session summary
+- [x] **4. Dream job**: `lucid-dream dream`, run by hand and review the git diff, then schedule nightly
+- [x] **5. Import old memory**: `lucid-dream import` for CLAUDE.md files, auto memory folders, Obsidian notes
+- [x] **6. Codex access**: AGENTS.md rule + its own token ([clients/codex](../clients/codex))
+- [ ] **7. Grok (later)**: the xAI API can call a remote MCP server, but only one it can reach from
+  the internet; until there is a tunnel, give Grok the daily digest ([clients/grok](../clients/grok))
+- [x] **8. Agent bridge** (added 2026-11-11): `send` and `messages` tools, so the agents
+  talk to each other across sessions and devices, not only share memory
+
+Not done anywhere yet:
+
+- [ ] Run the server on the Windows PC and connect Claude on Windows
+- [ ] Connect the Mac, install the hooks, import old memory
+- [ ] Schedule the nightly dream after a week of reviewing its diffs by hand
 
 ## Voice rules
 

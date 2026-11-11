@@ -1,0 +1,22 @@
+{
+  "env": {
+    "LUCID_URL": "http://<pc-name>:7878/mcp",
+    "LUCID_TOKEN": "<the claude token>"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "lucid-dream hook session-start", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "lucid-dream hook stop", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

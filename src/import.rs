@@ -1,0 +1,184 @@
+//! Bring old memory in: CLAUDE.md files, Claude's auto-memory folders, Obsidian
+//! notes. Each file becomes one inbox note, so dream merges it like any other
+//! note and nothing bypasses the voice rules. Importing twice adds nothing.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde_json::json;
+
+use crate::client::Client;
+use crate::store::{Note, Remembered, Store, MAX_NOTE_BYTES};
+use crate::util::Utc;
+
+const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
+
+/// Where imported notes go: straight into a store on this machine, or to a
+/// server (which records them under the token's agent).
+pub enum Sink<'a> {
+    Local { store: &'a Store, source: &'a str },
+    Remote(&'a Client),
+}
+
+#[derive(Default, Debug, PartialEq)]
+pub struct Report {
+    pub added: usize,
+    pub duplicates: usize,
+    pub skipped: usize,
+}
+
+pub fn run(paths: &[String], sink: &Sink, said_by: &str) -> Result<Report, String> {
+    let mut files = Vec::new();
+    for path in paths {
+        let path = Path::new(path);
+        if path.is_file() {
+            files.push(path.to_path_buf());
+        } else if path.is_dir() {
+            collect(path, &mut files).map_err(|e| format!("{}: {e}", path.display()))?;
+        } else {
+            return Err(format!("no such file or folder: {}", path.display()));
+        }
+    }
+    files.sort();
+
+    let mut report = Report::default();
+    for file in files {
+        let shown = file.display();
+        let text = match fs::read_to_string(&file) {
+            Ok(text) if text.trim().is_empty() => {
+                report.skipped += 1;
+                continue;
+            }
+            Ok(text) if text.trim().len() > MAX_NOTE_BYTES => {
+                eprintln!("skipped (over {MAX_NOTE_BYTES} bytes, split it first): {shown}");
+                report.skipped += 1;
+                continue;
+            }
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("skipped ({e}): {shown}");
+                report.skipped += 1;
+                continue;
+            }
+        };
+        let topic = file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let origin = shown.to_string();
+        let new = match sink {
+            Sink::Local { store, source } => {
+                let note = Note {
+                    source,
+                    said_by,
+                    text: &text,
+                    topic: Some(&topic),
+                    origin: Some(&origin),
+                };
+                let done = store
+                    .remember(&note, &Utc::now())
+                    .map_err(|e| format!("{shown}: {e}"))?;
+                matches!(done, Remembered::New(_))
+            }
+            Sink::Remote(client) => {
+                let args =
+                    json!({ "text": text, "said_by": said_by, "topic": topic, "origin": origin });
+                let reply = client
+                    .call("remember", args)
+                    .map_err(|e| format!("{shown}: {e}"))?;
+                !reply.starts_with("already")
+            }
+        };
+        if new {
+            report.added += 1;
+        } else {
+            report.duplicates += 1;
+        }
+    }
+    Ok(report)
+}
+
+/// Every Markdown file under `dir`, skipping hidden entries and build folders.
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            collect(&entry.path(), out)?;
+        } else if kind.is_file() && name.to_ascii_lowercase().ends_with(".md") {
+            out.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::tests::Temp;
+
+    #[test]
+    fn imports_markdown_once() {
+        let t = Temp::new();
+        let old = t.0.join("old");
+        fs::create_dir_all(old.join("sub")).unwrap();
+        fs::create_dir_all(old.join(".obsidian")).unwrap();
+        fs::create_dir_all(old.join("node_modules")).unwrap();
+        fs::write(old.join("CLAUDE.md"), "Always use Rust.").unwrap();
+        fs::write(old.join("sub/trip.md"), "Tokyo in May.").unwrap();
+        fs::write(old.join("sub/empty.md"), "  \n").unwrap();
+        fs::write(old.join("sub/photo.png"), "png").unwrap();
+        fs::write(old.join(".obsidian/app.md"), "config").unwrap();
+        fs::write(old.join("node_modules/readme.md"), "dep").unwrap();
+
+        let store = t.store();
+        let sink = Sink::Local {
+            store: &store,
+            source: "import",
+        };
+        let paths = [old.to_string_lossy().into_owned()];
+        let first = run(&paths, &sink, "user").unwrap();
+        assert_eq!(
+            first,
+            Report {
+                added: 2,
+                duplicates: 0,
+                skipped: 1
+            }
+        );
+        let again = run(&paths, &sink, "user").unwrap();
+        assert_eq!(
+            again,
+            Report {
+                added: 0,
+                duplicates: 2,
+                skipped: 1
+            }
+        );
+
+        let inbox = store.list("inbox").unwrap();
+        assert_eq!(inbox.len(), 2);
+        let bodies: Vec<String> = inbox.iter().map(|e| store.read(&e.path).unwrap()).collect();
+        let body = bodies
+            .iter()
+            .find(|b| b.contains("Always use Rust."))
+            .unwrap();
+        assert!(body.contains("source: import\nsaid_by: user\n"));
+        assert!(body.contains("\ntopic: CLAUDE\norigin: "));
+    }
+
+    #[test]
+    fn a_missing_path_is_an_error() {
+        let t = Temp::new();
+        let store = t.store();
+        let sink = Sink::Local {
+            store: &store,
+            source: "import",
+        };
+        assert!(run(&["/no/such/place".to_string()], &sink, "user").is_err());
+    }
+}

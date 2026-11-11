@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Give git an identity (the tests commit to throwaway stores)
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
