@@ -1,6 +1,7 @@
 //! Streamable HTTP transport: each POST to /mcp carries one message and gets a
 //! plain JSON reply. The bearer token decides which agent is speaking.
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -55,8 +57,11 @@ pub fn serve(addr: SocketAddr, app: App) -> Result<(), String> {
         app.store.root().display()
     );
     let router = Router::new()
-        .route("/mcp", post(post_mcp))
-        .route("/mcp/{token}", post(post_mcp_with_path_token))
+        .route("/mcp", post(post_mcp).get(get_mcp))
+        .route(
+            "/mcp/{token}",
+            post(post_mcp_with_path_token).get(get_mcp_with_path_token),
+        )
         .route("/health", get(|| async { "ok" }))
         .with_state(Arc::new(app));
     tokio::runtime::Runtime::new()
@@ -86,6 +91,46 @@ async fn post_mcp_with_path_token(
     respond(&app, &headers, Some(&token), &body)
 }
 
+/// GET opens the stream a server may use to push messages. This server never
+/// pushes, but some clients probe with GET first and give up on a 405, so an
+/// admitted caller gets an idle stream and anyone else gets a 401 that tells
+/// the client a token is needed.
+async fn get_mcp(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+    listen(&app, &headers, None)
+}
+
+async fn get_mcp_with_path_token(
+    State(app): State<Arc<App>>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if app.only.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    listen(&app, &headers, Some(&token))
+}
+
+fn listen(app: &App, headers: &HeaderMap, path_token: Option<&str>) -> Response {
+    match identify(app, headers, path_token) {
+        Caller::Nobody => unauthorized(),
+        Caller::Local if !origin_allowed(headers) => {
+            (StatusCode::FORBIDDEN, "origin not allowed").into_response()
+        }
+        _ => Sse::new(futures_util::stream::pending::<Result<Event, Infallible>>())
+            .keep_alive(KeepAlive::default())
+            .into_response(),
+    }
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        "missing or wrong bearer token",
+    )
+        .into_response()
+}
+
 fn respond(app: &App, headers: &HeaderMap, path_token: Option<&str>, body: &[u8]) -> Response {
     let who = match identify(app, headers, path_token) {
         Caller::Agent(who) => who,
@@ -93,14 +138,7 @@ fn respond(app: &App, headers: &HeaderMap, path_token: Option<&str>, body: &[u8]
         // the one calling. Only a local page may; this blocks DNS rebinding.
         Caller::Local if origin_allowed(headers) => LOCAL.to_string(),
         Caller::Local => return (StatusCode::FORBIDDEN, "origin not allowed").into_response(),
-        Caller::Nobody => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(header::WWW_AUTHENTICATE, "Bearer")],
-                "missing or wrong bearer token",
-            )
-                .into_response();
-        }
+        Caller::Nobody => return unauthorized(),
     };
     let Ok(msg) = serde_json::from_slice::<Value>(body) else {
         let reply = mcp::error(Value::Null, -32700, "parse error");
