@@ -49,8 +49,12 @@ for another agent. The [voice rules](docs/roadmap.md#voice-rules) build on this.
 
 ## Set up the PC that holds the memory
 
+Download the binary for your system from the
+[latest release](https://github.com/jksim26/lucid-dream/releases/latest) and put
+it somewhere on your PATH. Or build it yourself with Rust:
+
 ```bash
-cargo install --path .
+cargo install --git https://github.com/jksim26/lucid-dream
 ```
 
 ```bash
