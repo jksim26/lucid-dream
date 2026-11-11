@@ -53,12 +53,18 @@ Environment:
   LUCID_URL        server endpoint for hooks and import, e.g. http://my-pc:7878/mcp
   LUCID_TOKEN      this device's agent token, for hooks and import
   LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p)
+
+lucid-dream --version prints the installed version.
 ";
 
 fn main() -> ExitCode {
     let mut raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.is_empty() || raw.iter().any(|a| a == "-h" || a == "--help") {
         print!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    if raw.iter().any(|a| a == "--version" || a == "-V") {
+        println!("lucid-dream {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
     let command = raw.remove(0);

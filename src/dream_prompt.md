@@ -23,6 +23,15 @@ One person works with several AI agents (Claude, Codex, Grok) on several devices
 5. **Archive.** Move every inbox file you processed to `archive/inbox/` with `git mv`, unchanged and under the same file name. When a note or page is replaced or retired, `git mv` it unchanged to `archive/notes/` or `archive/wiki/`, and write the new version as a new file or as an edit to another file.
 6. **Digest.** Write `digest/<today>.md`: what was added, what changed, what was archived, and anything the user should look at, in plain sentences a person or an agent without tools could read on its own. Then reply with a three-line summary of the same, and nothing else.
 
+## Only what the sources say
+
+Every fact you write must come from a note, a log or a message in this store. You know many things about the world; none of them belong here unless a source says them.
+
+- Do not fill in detail a source left out. If the user pasted two links and said nothing about them, the memory is that they pasted two links, not what those pages offer.
+- Mark something `(user, date)` only when the user's own words say it. A conclusion you drew from their words is yours: write it as an inference and say what it rests on, or leave it out.
+- When a source can be read two ways, say so and quote it, rather than choosing the reading that makes a tidier fact. "approve dry run" next to a link does not establish what was approved.
+- If you cannot tell whether something is still true, give its date and say it is unconfirmed.
+
 ## Voice rules
 
 These outrank your own judgement.
