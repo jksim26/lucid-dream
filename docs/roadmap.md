@@ -4,7 +4,7 @@ Source: the Lucid Dream Roadmap board, https://claude.ai/artifact/A9MQA4ajBmiFMY
 
 ## Build order
 
-- [ ] **1. Repo + read server**: folder skeleton (done), MCP read tools, connect Claude on Windows
+- [ ] **1. Repo + read server**: folder skeleton (done), MCP read tools (done), connect Claude on Windows
 - [ ] **2. Write tools + voices**: `remember()`, one token per agent, `source` + `said_by`, connect Mac
 - [ ] **3. Device hooks**: SessionStart loads the index, Stop sends a session summary
 - [ ] **4. Dream job**: run by hand, review the git diff, then schedule nightly

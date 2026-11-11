@@ -32,10 +32,50 @@ The server runs on the Windows PC and is reached over Tailscale.
 | `memory/archive/` | Replaced or retired notes; nothing is hard-deleted | Dream |
 | `memory/MEMORY.md` | The index loaded at session start (under 200 lines) | Dream |
 | `memory/open-questions.md` | Your own conflicting decisions, awaiting your call | Dream |
-| `server/` | MCP server (Rust), not built yet | |
+| `server/` | MCP server (Rust): read tools over HTTP or stdio | |
 | `docs/` | Roadmap, rules, references | |
+
+## Server
+
+Read-only MCP server with four tools: `index` (returns `MEMORY.md`), `list`, `read`
+and `search`. It refuses absolute paths, `..`, hidden files and symlinks that leave
+the memory root.
+
+```bash
+cd server && cargo build --release
+```
+
+Run it over HTTP (the endpoint is `/mcp`; `/health` answers `ok` without a token):
+
+```bash
+LUCID_TOKEN=<secret> ./target/release/lucid-dream-server --root <memory dir> --bind 0.0.0.0:7878
+```
+
+Or over stdio, for a client on the same machine:
+
+```bash
+./target/release/lucid-dream-server --root <memory dir> --stdio
+```
+
+| Setting | Flag | Environment | Default |
+| --- | --- | --- | --- |
+| Memory root | `--root` | `LUCID_ROOT` | none, required |
+| Listen address | `--bind` | `LUCID_BIND` | `127.0.0.1:7878` |
+| Bearer token | | `LUCID_TOKEN` | none; required off loopback |
+
+Connect Claude Code from another device on the tailnet:
+
+```bash
+claude mcp add --transport http lucid-dream http://<pc-name>:7878/mcp --header "Authorization: Bearer <secret>"
+```
+
+## Keep real memory out of this repo
+
+This repo is public. `memory/` here is an empty template. Copy it somewhere else,
+run `git init` there, and point `--root` at that copy, so your notes and dream's
+nightly commits stay in a private repo of their own.
 
 ## Status
 
-Step 1 of 7: repo and folder skeleton exist; the read server is next.
-See [docs/roadmap.md](docs/roadmap.md).
+Step 1 of 7: the skeleton and the read server exist; connecting Claude on Windows
+is left. See [docs/roadmap.md](docs/roadmap.md).
