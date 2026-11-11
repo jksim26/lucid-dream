@@ -425,9 +425,17 @@ impl Store {
     }
 
     /// Messages addressed to `who` or to everyone, oldest first. By default
-    /// only those `who` has not been given before; they are then marked seen.
-    /// With `include_seen`, the most recent ones regardless.
-    pub fn messages(&self, who: &str, include_seen: bool) -> Result<Vec<Message>, StoreError> {
+    /// only those `who` has not marked seen; with `include_seen`, the most
+    /// recent ones regardless. `mark_seen` records the returned ones as seen.
+    /// An agent runs many sessions under one name, so a session-start hook
+    /// only peeks: a message keeps being shown until a session that actually
+    /// read it asks for it with `mark_seen`.
+    pub fn messages(
+        &self,
+        who: &str,
+        include_seen: bool,
+        mark_seen: bool,
+    ) -> Result<Vec<Message>, StoreError> {
         check_name("agent", who)?;
         let dir = self.root.join("messages");
         if !dir.is_dir() {
@@ -469,7 +477,7 @@ impl Store {
             .filter(|(_, was_seen)| !was_seen)
             .map(|(m, _)| format!("{}\n", m.path))
             .collect();
-        if !newly_seen.is_empty() {
+        if mark_seen && !newly_seen.is_empty() {
             if let Some(dir) = seen_file.parent() {
                 fs::create_dir_all(dir)?;
             }
@@ -513,11 +521,11 @@ mod message_tests {
         .unwrap();
 
         assert!(s
-            .messages("claude", false)
+            .messages("claude", false, true)
             .unwrap()
             .iter()
             .all(|m| m.from == "grok"));
-        let for_codex = s.messages("codex", false).unwrap();
+        let for_codex = s.messages("codex", false, true).unwrap();
         assert_eq!(for_codex.len(), 2);
         assert_eq!(
             (for_codex[0].from.as_str(), for_codex[0].to.as_str()),
@@ -525,9 +533,29 @@ mod message_tests {
         );
         assert_eq!(for_codex[0].text, "The API changed; see notes/api.md.");
         assert_eq!(for_codex[1].re.as_deref(), Some(path.as_str()));
-        assert!(s.messages("codex", false).unwrap().is_empty());
-        assert_eq!(s.messages("codex", true).unwrap().len(), 2);
-        assert!(s.messages("grok", false).unwrap().is_empty());
+        assert!(s.messages("codex", false, true).unwrap().is_empty());
+        assert_eq!(s.messages("codex", true, true).unwrap().len(), 2);
+        assert!(s.messages("grok", false, true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn peeking_leaves_a_message_unread_for_the_next_session() {
+        let t = Temp::new();
+        let s = t.store();
+        s.send(
+            "grok",
+            "claude",
+            "Hello from Grok.",
+            None,
+            &Utc::from_unix(1_700_000_000),
+        )
+        .unwrap();
+        // Two sessions start and peek; both see it.
+        assert_eq!(s.messages("claude", false, false).unwrap().len(), 1);
+        assert_eq!(s.messages("claude", false, false).unwrap().len(), 1);
+        // One of them reads it for real; later sessions are not shown it again.
+        assert_eq!(s.messages("claude", false, true).unwrap().len(), 1);
+        assert!(s.messages("claude", false, false).unwrap().is_empty());
     }
 
     #[test]

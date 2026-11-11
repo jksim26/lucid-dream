@@ -24,10 +24,18 @@ pub fn session_start(client: &Client) -> Result<(), String> {
          for anything a future session should know.",
         index.trim()
     );
-    // Messages other agents left for this one since its last session.
-    if let Ok(messages) = client.call("messages", json!({})) {
+    // Messages other agents left for this one. Many sessions share one agent
+    // name, so this only peeks: the message stays unread until a session that
+    // has actually handled it calls `messages`.
+    if let Ok(messages) = client.call("messages", json!({ "peek": true })) {
         if messages != "no new messages" {
-            println!("\n# Messages from your other agents\n\n{}", messages.trim());
+            println!(
+                "\n# Unread messages from your other agents\n\n{}\n\nTell the user about these \
+                 if they are relevant or if they ask. Once they have been dealt with, call the \
+                 lucid-dream `messages` tool to mark them read; until then every new session is \
+                 shown them again.",
+                messages.trim()
+            );
         }
     }
     Ok(())
