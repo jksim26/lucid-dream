@@ -1,0 +1,16 @@
+{
+  "name": "lucid-dream",
+  "owner": {
+    "name": "jksim26",
+    "url": "https://github.com/jksim26"
+  },
+  "description": "Lucid Dream: one memory for all your AI agents, backed by your own lucid-dream server.",
+  "plugins": [
+    {
+      "name": "lucid-dream",
+      "description": "Shared memory and messaging across your agents.",
+      "version": "0.11.0",
+      "source": "./plugins/claude-code"
+    }
+  ]
+}

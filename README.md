@@ -110,6 +110,28 @@ and keeps a backup of your settings):
 lucid-dream setup --url http://<pc-name>:7878/mcp
 ```
 
+**Or as a plugin.** This repository is also a plugin marketplace, so Claude
+Code and the Codex CLI can be connected without `setup`. The program above
+still has to be installed; the plugin only wires it in.
+
+Claude Code (it asks for the server address and the token when you enable
+it):
+
+```bash
+claude plugin marketplace add jksim26/lucid-dream && claude plugin install lucid-dream@lucid-dream
+```
+
+Codex CLI (then trust its hooks once with `/hooks`, and run
+`lucid-dream setup --codex --url <address>` for the memory tools):
+
+```bash
+codex plugin marketplace add jksim26/lucid-dream && codex plugin add lucid-dream@lucid-dream
+```
+
+Use `setup` or the plugin, not both; if both are present the plugin's hooks
+stand aside and `doctor` tells you. More in
+[plugins/README.md](plugins/README.md).
+
 Three more commands look after an install:
 
 ```bash
@@ -154,8 +176,9 @@ Where lucid-dream is behind, so you know before you install it:
 - Search matches words, not meaning: it scans the Markdown files with no index,
   entities or vectors. Dream adds links and alternative words to each page to
   make up for part of that.
-- Only Claude Code sessions are recorded in full by a hook. Other agents log
-  a summary when they choose to.
+- Only Claude Code and Codex CLI sessions are recorded in full by a hook.
+  Grok Bot and ChatGPT log a summary when they choose to. A picture is noted
+  in the record, not stored.
 - Dream needs an agent CLI you are logged in to (Claude Code or Codex). With
   none, memory still works but nobody tidies it.
 - Only Claude Code sessions and agents with a webhook are woken. The phone

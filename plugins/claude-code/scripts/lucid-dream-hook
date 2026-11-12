@@ -1,0 +1,34 @@
+#!/bin/sh
+# lucid-dream plugin hook launcher. Usage: lucid-dream-hook <agent> <event>
+#
+# Finds the installed lucid-dream program and hands it one hook event. It has
+# no logic of its own and never gets in the agent's way: without the program
+# it reads and drops the hook's input, says so once at session start, and
+# exits 0.
+agent="${1:-}"
+event="${2:-}"
+
+bin=""
+if command -v lucid-dream >/dev/null 2>&1; then
+    bin=$(command -v lucid-dream)
+else
+    # An app started from the desktop may not have these on PATH.
+    for candidate in "${HOME:-}/.local/bin/lucid-dream" "${HOME:-}/.cargo/bin/lucid-dream" \
+        /opt/homebrew/bin/lucid-dream /usr/local/bin/lucid-dream /usr/bin/lucid-dream \
+        "${USERPROFILE:-}/.local/bin/lucid-dream.exe" "${USERPROFILE:-}/.cargo/bin/lucid-dream.exe"; do
+        if [ -x "$candidate" ]; then
+            bin="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$bin" ] || [ -z "$agent" ] || [ -z "$event" ]; then
+    cat >/dev/null
+    if [ "$event" = "session-start" ]; then
+        echo "lucid-dream: the lucid-dream program was not found, so this session has no shared memory. Install it: https://github.com/jksim26/lucid-dream#install"
+    fi
+    exit 0
+fi
+
+exec "$bin" hook "$event" --agent "$agent"

@@ -172,11 +172,80 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
     summary.map(|_| ())
 }
 
+/// One transcript line, in Claude Code's shape. A Codex session file says
+/// the same things differently, so its lines are turned into that shape:
+/// who spoke, and a list of text, image, tool_use and tool_result blocks.
+fn entry_of(line: &str) -> Option<Value> {
+    let entry: Value = serde_json::from_str(line).ok()?;
+    if entry["type"] != "response_item" {
+        return Some(entry);
+    }
+    let item = &entry["payload"];
+    let kind = item["type"].as_str()?;
+    let (who, blocks) = if kind == "message" {
+        let who = item["role"]
+            .as_str()
+            .filter(|r| *r == "user" || *r == "assistant")?;
+        let blocks: Vec<Value> = item["content"]
+            .as_array()?
+            .iter()
+            .filter_map(|block| match block["type"].as_str()? {
+                "input_text" | "output_text" => {
+                    let text = block["text"].as_str()?.trim();
+                    // Codex opens a session by handing the model its rules
+                    // and surroundings as user text; the user typed neither.
+                    let plumbing = who == "user"
+                        && (text.starts_with('<') || text.starts_with("# AGENTS.md instructions"));
+                    (!plumbing).then(|| json!({ "type": "text", "text": text }))
+                }
+                "input_image" => Some(json!({ "type": "image" })),
+                _ => None,
+            })
+            .collect();
+        (who, blocks)
+    } else if kind.ends_with("_call_output") {
+        let content = match &item["output"] {
+            Value::Array(parts) => Value::Array(
+                parts
+                    .iter()
+                    .map(|part| match part["text"].as_str() {
+                        Some(text) => json!({ "type": "text", "text": text }),
+                        None => json!({ "type": part["type"].as_str().unwrap_or("attachment") }),
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        };
+        (
+            "user",
+            vec![json!({ "type": "tool_result", "content": content })],
+        )
+    } else if kind.ends_with("_call") {
+        let input = ["input", "arguments", "action"]
+            .iter()
+            .map(|key| &item[*key])
+            .find(|v| !v.is_null())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let name = item["name"].as_str().unwrap_or(kind);
+        (
+            "assistant",
+            vec![json!({ "type": "tool_use", "name": name, "input": input })],
+        )
+    } else {
+        return None;
+    };
+    Some(json!({
+        "type": who, "timestamp": entry["timestamp"], "message": { "content": blocks },
+    }))
+}
+
 /// One transcript line as Markdown for the session's record: what the user
-/// typed, what the assistant said, each tool call and its result. Empty for
-/// lines that carry none of those (thinking, harness plumbing).
+/// typed, what the assistant said, each tool call and its result. A picture
+/// or file is noted, not stored. Empty for lines that carry none of those
+/// (thinking, harness plumbing).
 fn record_entry(line: &str) -> String {
-    let Ok(entry) = serde_json::from_str::<Value>(line) else {
+    let Some(entry) = entry_of(line) else {
         return String::new();
     };
     let who = match entry["type"].as_str() {
@@ -185,24 +254,39 @@ fn record_entry(line: &str) -> String {
         _ => return String::new(),
     };
     let at = entry["timestamp"].as_str().unwrap_or("");
-    let said = |text: &str| {
-        let text = text.trim();
-        // Text starting with a tag is harness plumbing, not something typed.
-        if text.is_empty() || (who == "User" && (entry["isMeta"] == true || text.starts_with('<')))
-        {
-            return String::new();
-        }
-        format!("\n### {who} {at}\n{}\n", clip(text, MAX_RECORD_TEXT_CHARS))
-    };
     let blocks = match &entry["message"]["content"] {
-        Value::String(text) => return redact(&said(text)),
-        Value::Array(blocks) => blocks,
+        Value::String(text) => vec![json!({ "type": "text", "text": text })],
+        Value::Array(blocks) => blocks.clone(),
         _ => return String::new(),
     };
     let mut out = String::new();
-    for block in blocks {
+    let mut headed = false;
+    let mut say = |out: &mut String, body: &str| {
+        if !headed {
+            out.push_str(&format!("\n### {who} {at}\n"));
+            headed = true;
+        }
+        out.push_str(body);
+        out.push('\n');
+    };
+    for block in &blocks {
         match block["type"].as_str() {
-            Some("text") => out.push_str(&said(block["text"].as_str().unwrap_or(""))),
+            Some("text") => {
+                let text = block["text"].as_str().unwrap_or("").trim();
+                // Text starting with a tag is harness plumbing, not something typed.
+                let plumbing = who == "User" && (entry["isMeta"] == true || text.starts_with('<'));
+                if !text.is_empty() && !plumbing {
+                    say(&mut out, &clip(text, MAX_RECORD_TEXT_CHARS));
+                }
+            }
+            Some(kind @ ("image" | "document")) => {
+                let detail = block["source"]["media_type"].as_str().unwrap_or("");
+                let gap = if detail.is_empty() { "" } else { " " };
+                say(
+                    &mut out,
+                    &format!("[{kind}{gap}{detail} attached; its contents are not stored]"),
+                );
+            }
             Some("tool_use") => out.push_str(&format!(
                 "- tool {} {at}: {}\n",
                 block["name"].as_str().unwrap_or("?"),
@@ -211,7 +295,15 @@ fn record_entry(line: &str) -> String {
             Some("tool_result") => {
                 let result = match &block["content"] {
                     Value::String(text) => text.clone(),
-                    other => message_text(other),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .map(|part| match part["text"].as_str() {
+                            Some(text) => text.to_string(),
+                            None => format!("[{}]", part["type"].as_str().unwrap_or("attachment")),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    _ => String::new(),
                 };
                 let one_line = result.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !one_line.is_empty() {
@@ -277,7 +369,7 @@ fn read_transcript(jsonl: &str) -> (Vec<String>, Option<String>) {
     let mut prompts = Vec::new();
     let mut reply = None;
     for line in jsonl.lines() {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+        let Some(entry) = entry_of(line) else {
             continue;
         };
         let text = message_text(&entry["message"]["content"]);
@@ -621,11 +713,41 @@ not json
         ] {
             assert_eq!(record_entry(quiet), "", "{quiet}");
         }
+        // A photo is noted, not stored, with or without words beside it.
+        let photo = r#"{"type":"user","timestamp":"T2","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"what is this?"}]}}"#;
+        assert_eq!(
+            record_entry(photo),
+            "\n### User T2\n[image image/png attached; its contents are not stored]\nwhat is this?\n"
+        );
+        let shot = r#"{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"saved"},{"type":"image","source":{"data":"AAAA"}}]}]}}"#;
+        assert_eq!(record_entry(shot), "  - result: saved [image]\n");
         let long = format!(
             r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","content":"{}"}}]}}}}"#,
             "a ".repeat(MAX_RECORD_RESULT_CHARS)
         );
         assert!(record_entry(&long).chars().count() < MAX_RECORD_RESULT_CHARS + 40);
+    }
+
+    #[test]
+    fn a_codex_session_file_reads_like_a_claude_one() {
+        let lines = [
+            r##"{"timestamp":"T0","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}"##,
+            r##"{"timestamp":"T1","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n\nx"},{"type":"input_text","text":"<environment_context>y</environment_context>"}]}}"##,
+            r##"{"timestamp":"T2","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check the tests"},{"type":"input_image","image_url":"data:AAAA"}]}}"##,
+            r##"{"timestamp":"T3","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"cargo test"}}"##,
+            r##"{"timestamp":"T4","type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"90 passed"}]}}"##,
+            r##"{"timestamp":"T5","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"All pass."}]}}"##,
+            r##"{"timestamp":"T6","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"All pass."}}"##,
+        ];
+        let (prompts, reply) = read_transcript(&lines.join("\n"));
+        assert_eq!(prompts, ["Check the tests"]);
+        assert_eq!(reply.as_deref(), Some("All pass."));
+        let record: String = lines.iter().map(|line| record_entry(line)).collect();
+        assert_eq!(
+            record,
+            "\n### User T2\nCheck the tests\n[image attached; its contents are not stored]\n\
+             - tool exec T3: \"cargo test\"\n  - result: 90 passed\n\n### Assistant T5\nAll pass.\n"
+        );
     }
 
     #[test]

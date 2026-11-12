@@ -1,0 +1,12 @@
+{
+  "name": "lucid-dream",
+  "version": "0.11.0",
+  "description": "One memory shared by all your AI agents. Loads the memory index when a Codex session starts and logs each session to the lucid-dream server you run. Needs the lucid-dream program, and `lucid-dream setup --codex` run once. Codex runs the hooks only after you trust them in /hooks.",
+  "author": {
+    "name": "jksim26",
+    "url": "https://github.com/jksim26"
+  },
+  "homepage": "https://github.com/jksim26/lucid-dream",
+  "repository": "https://github.com/jksim26/lucid-dream",
+  "license": "MIT"
+}

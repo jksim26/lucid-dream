@@ -205,9 +205,10 @@ through Lucid Dream relay". Grok Bot should wake and tell you it arrived.
 | --- | --- | --- | --- |
 | Grok Bot | yes | yes | yes, by webhook |
 | ChatGPT (Site plugin) | yes | yes | no, reads when asked |
-| Codex CLI | yes | yes | no, reads at session start |
+| Codex CLI | yes | yes | no, reads at session start (it has no hook that can wake it) |
 
-None of these three is logged automatically. Each is told, in the block you
+Codex is logged automatically if you add its plugin
+([plugins/README.md](../plugins/README.md)); otherwise none of these three is. Each is told, in the block you
 paste or in its `AGENTS.md`, to log a short summary when a piece of work is
 done; whether it does is up to the agent.
 

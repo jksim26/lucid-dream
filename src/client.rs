@@ -15,13 +15,34 @@ impl Client {
     /// The server comes from `--url` or LUCID_URL; the token only from
     /// LUCID_TOKEN, so it never shows up in a process list.
     pub fn from_env(url: Option<String>, timeout: Duration) -> Result<Client, String> {
+        Client::for_agent(url, timeout, None)
+    }
+
+    /// As `from_env`, for a hook that says which agent it runs in. A Claude
+    /// Code plugin passes its two options as CLAUDE_PLUGIN_OPTION_URL and
+    /// _TOKEN. Codex keeps its own token in LUCID_TOKEN_CODEX and the
+    /// server's address in its config file, where `setup --codex` put it.
+    pub fn for_agent(
+        url: Option<String>,
+        timeout: Duration,
+        agent: Option<&str>,
+    ) -> Result<Client, String> {
         let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+        let codex = agent == Some("codex");
         let url = url
             .or_else(|| env("LUCID_URL"))
+            .or_else(|| match codex {
+                true => crate::setup::codex_home().and_then(|home| crate::setup::codex_url(&home)),
+                false => env("CLAUDE_PLUGIN_OPTION_URL"),
+            })
             .ok_or("no server; pass --url or set LUCID_URL (e.g. http://my-pc:7878/mcp)")?;
+        let token = match codex {
+            true => env(crate::setup::CODEX_TOKEN_ENV).or_else(|| env("LUCID_TOKEN")),
+            false => env("LUCID_TOKEN").or_else(|| env("CLAUDE_PLUGIN_OPTION_TOKEN")),
+        };
         Ok(Client {
             url,
-            token: env("LUCID_TOKEN"),
+            token,
             timeout,
         })
     }

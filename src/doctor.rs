@@ -93,8 +93,27 @@ pub fn run(options: &Options) -> bool {
                 .map(|_| "http://127.0.0.1:7878/mcp".to_string())
         });
     let token = env("LUCID_TOKEN").or_else(|| from_settings("LUCID_TOKEN"));
-    if let Some(settings) = &settings {
-        checks.extend(hooks(settings, &|exe| version_of(exe)));
+    // The plugin brings the same hooks; where both are present the plugin's
+    // stand aside, so say which route is in use rather than call it broken.
+    let plugin = plugin_installed(options.settings);
+    let by_setup = settings.as_ref().is_some_and(crate::setup::has_hooks);
+    match (&settings, plugin, by_setup) {
+        (_, true, false) => checks.push(check(
+            Level::Ok,
+            "the hooks and memory tools come from the lucid-dream plugin (its address and \
+             token are the plugin's options, which this check cannot read)",
+        )),
+        (Some(settings), true, true) => {
+            checks.extend(hooks(settings, &|exe| version_of(exe)));
+            checks.push(check(
+                Level::Warn,
+                "both `setup` and the lucid-dream plugin are installed; the plugin's hooks \
+                 stand aside, but its memory tools are listed twice. Keep one: run \
+                 `lucid-dream uninstall`, or remove the plugin",
+            ));
+        }
+        (Some(settings), false, _) => checks.extend(hooks(settings, &|exe| version_of(exe))),
+        (None, _, _) => {}
     }
     if connected {
         if !options.offline {
@@ -155,6 +174,21 @@ fn release() -> Check {
             format!("could not check for a newer release: {e}"),
         ),
     }
+}
+
+/// True when Claude Code's list of installed plugins, kept beside the
+/// settings file, names the lucid-dream plugin.
+fn plugin_installed(settings: &Path) -> bool {
+    settings
+        .parent()
+        .map(|dir| dir.join("plugins").join("installed_plugins.json"))
+        .and_then(|file| fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|list| {
+            let plugins = list["plugins"].as_object()?;
+            Some(plugins.keys().any(|name| name.starts_with("lucid-dream@")))
+        })
+        .unwrap_or(false)
 }
 
 fn read_settings(file: &Path, checks: &mut Vec<Check>) -> Option<Value> {

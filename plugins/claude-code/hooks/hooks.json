@@ -1,0 +1,50 @@
+{
+  "description": "lucid-dream: load shared memory, log the session, wake on a message",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/lucid-dream-hook\" claude-plugin session-start",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/lucid-dream-hook\" claude-plugin wait",
+            "timeout": 86400,
+            "asyncRewake": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/lucid-dream-hook\" claude-plugin stop",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/lucid-dream-hook\" claude-plugin wait",
+            "timeout": 86400,
+            "asyncRewake": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/lucid-dream-hook\" claude-plugin session-end",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

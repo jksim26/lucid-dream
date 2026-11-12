@@ -23,6 +23,9 @@
    makes it load the index and log its sessions. To undo it, delete those
    two additions.
 
+4. Optional: add the plugin, so Codex loads the index and logs its sessions
+   by hook instead of by rule. See [plugins/README.md](../../plugins/README.md).
+
 Check it: start Codex and ask it to "call `who` on lucid-dream". It should
 list `codex (you)`.
 

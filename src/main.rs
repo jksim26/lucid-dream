@@ -99,6 +99,8 @@ On any device:
   lucid-dream hook wait [--url URL]             wait for a message, then wake the session
                                                 (Claude Code hook with asyncRewake)
   lucid-dream hook session-end [--url URL]      take the session off the `who` list
+                                                (the plugins call these with --agent
+                                                claude-plugin or --agent codex)
   lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)
   lucid-dream who [--root <dir> | --url URL]    List the agents and their sessions
   lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
@@ -670,6 +672,10 @@ fn settings_file(args: &Args) -> Result<PathBuf, String> {
     match args.option("--settings") {
         Some(path) => Ok(PathBuf::from(path)),
         None => {
+            // Claude Code keeps its files elsewhere when this is set.
+            if let Some(dir) = env("CLAUDE_CONFIG_DIR") {
+                return Ok(PathBuf::from(dir).join("settings.json"));
+            }
             let home = env("HOME")
                 .or_else(|| env("USERPROFILE"))
                 .ok_or("no home folder; pass --settings <file>")?;
@@ -733,12 +739,8 @@ fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
     if args.switches.contains("--codex") {
         let home = args
             .option("--codex-home")
-            .or_else(|| env("CODEX_HOME"))
             .map(PathBuf::from)
-            .or_else(|| {
-                let home = env("HOME").or_else(|| env("USERPROFILE"))?;
-                Some(PathBuf::from(home).join(".codex"))
-            })
+            .or_else(setup::codex_home)
             .ok_or("no home folder; pass --codex-home")?;
         setup::codex(&home, &url, args.switches.contains("--plan"))?;
         match env(setup::CODEX_TOKEN_ENV) {
@@ -889,8 +891,20 @@ fn hook(raw: Vec<String>) -> Result<(), String> {
     if std::env::var_os(dream::DREAMING_ENV).is_some() {
         return Ok(());
     }
-    let args = Args::parse(raw, &["--url"], &[])?;
-    let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
+    let args = Args::parse(raw, &["--url", "--agent"], &[])?;
+    let agent = args.option("--agent");
+    // A plugin's hooks stand aside where `setup` already put the same hooks
+    // in Claude Code's settings, so nothing is logged or woken twice.
+    if agent.as_deref() == Some("claude-plugin") {
+        let settings = settings_file(&args)
+            .ok()
+            .and_then(|file| std::fs::read_to_string(file).ok())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        if settings.is_some_and(|settings| setup::has_hooks(&settings)) {
+            return Ok(());
+        }
+    }
+    let client = Client::for_agent(args.option("--url"), HOOK_TIMEOUT, agent.as_deref())?;
     match args.words.first().map(String::as_str) {
         Some("session-start") => {
             // Claude Code passes details on stdin; a person running this by hand passes nothing.

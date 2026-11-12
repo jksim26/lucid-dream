@@ -38,6 +38,8 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
 - [x] **18. Deeper memory** (added 2026-11-12): full session records by hook, search in
   two layers with several words, pages linked and given alternative words by dream,
   optional backup after each dream, `setup --codex`
+- [x] **19. Plugins** (added 2026-11-12): this repo is a marketplace for a Claude Code
+  plugin and a Codex plugin; Codex sessions are logged by hook
 
 Not done yet:
 

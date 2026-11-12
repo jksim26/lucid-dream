@@ -213,6 +213,44 @@ const CODEX_RULE_MARK: &str = "## Shared memory (lucid-dream)";
 const CODEX_SERVER_MARK: &str = "[mcp_servers.lucid-dream]";
 pub const CODEX_TOKEN_ENV: &str = "LUCID_TOKEN_CODEX";
 
+/// Where the Codex CLI keeps its files: CODEX_HOME, or `.codex` at home.
+pub fn codex_home() -> Option<PathBuf> {
+    let env = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty());
+    env("CODEX_HOME").map(PathBuf::from).or_else(|| {
+        let home = env("HOME").or_else(|| env("USERPROFILE"))?;
+        Some(PathBuf::from(home).join(".codex"))
+    })
+}
+
+/// The server address in Codex's config, as `codex()` wrote it.
+pub fn codex_url(home: &Path) -> Option<String> {
+    let config = fs::read_to_string(home.join("config.toml")).ok()?;
+    let ours = config.split(CODEX_SERVER_MARK).nth(1)?;
+    ours.lines()
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "url").then(|| value.trim().trim_matches('"').to_string())
+        })
+        .filter(|url| !url.is_empty())
+}
+
+/// True when the settings file already runs lucid-dream's hooks, as `setup`
+/// installs them. A plugin's copy of the same hooks then stands aside, so
+/// nothing is logged or woken twice.
+pub fn has_hooks(settings: &Value) -> bool {
+    settings["hooks"].as_object().is_some_and(|events| {
+        events
+            .values()
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(|group| group["hooks"].as_array())
+            .flatten()
+            .any(is_ours)
+    })
+}
+
 /// Connect the Codex CLI on this machine: add the server to its config and
 /// the rule to its instructions. Both files are only added to, and only once;
 /// a copy of each is kept beside it before the first change.
@@ -447,11 +485,62 @@ mod tests {
         assert!(read("AGENTS.md").starts_with(CODEX_RULE_MARK));
         assert!(read("AGENTS.md").contains("call `log`"));
 
+        assert_eq!(codex_url(&dir).as_deref(), Some("http://pc:7878/mcp"));
+
         // Again: nothing is added twice.
         codex(&dir, "http://other:1/mcp", false).unwrap();
         assert_eq!(read("config.toml"), config);
         assert_eq!(read("AGENTS.md").matches(CODEX_RULE_MARK).count(), 1);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_plugins_carry_this_version_and_the_same_launcher() {
+        let version = env!("CARGO_PKG_VERSION");
+        for manifest in [
+            include_str!("../plugins/claude-code/.claude-plugin/plugin.json"),
+            include_str!("../plugins/codex/.codex-plugin/plugin.json"),
+        ] {
+            let manifest: Value = serde_json::from_str(manifest).unwrap();
+            assert_eq!(manifest["version"], version);
+            assert_eq!(manifest["name"], "lucid-dream");
+        }
+        let market: Value =
+            serde_json::from_str(include_str!("../.claude-plugin/marketplace.json")).unwrap();
+        assert_eq!(market["plugins"][0]["version"], version);
+        assert_eq!(
+            include_str!("../plugins/claude-code/scripts/lucid-dream-hook"),
+            include_str!("../plugins/codex/scripts/lucid-dream-hook")
+        );
+        // Every hook the plugins install is one this program has.
+        for hooks in [
+            include_str!("../plugins/claude-code/hooks/hooks.json"),
+            include_str!("../plugins/codex/hooks/hooks.json"),
+        ] {
+            let hooks: Value = serde_json::from_str(hooks).unwrap();
+            for (_, groups) in hooks["hooks"].as_object().unwrap() {
+                for hook in groups[0]["hooks"].as_array().unwrap() {
+                    let command = hook["command"].as_str().unwrap();
+                    let event = command.rsplit(' ').next().unwrap();
+                    assert!(
+                        HOOKS.iter().any(|(_, name, _, _)| *name == event),
+                        "{command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn knows_when_settings_already_run_the_hooks() {
+        let ours = json!({ "hooks": { "Stop": [{ "hooks": [
+            { "type": "command", "command": "/x/lucid-dream hook stop" }
+        ]}]}});
+        let other = json!({ "hooks": { "Stop": [{ "hooks": [
+            { "type": "command", "command": "other-tool hook stop" }
+        ]}]}});
+        assert!(has_hooks(&ours));
+        assert!(!has_hooks(&other) && !has_hooks(&json!({})));
     }
 
     #[test]

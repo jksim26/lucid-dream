@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0 (2026-11-12)
+
+- Plugins. This repository is now a plugin marketplace for Claude Code
+  (`.claude-plugin/marketplace.json`, `plugins/claude-code`) and for the
+  Codex CLI (`.agents/plugins/marketplace.json`, `plugins/codex`). The Claude
+  Code plugin brings the hooks and the memory tools and asks for the server
+  address and token; the Codex plugin brings hooks that load the index when
+  a session starts and log it when a turn ends. Both need the lucid-dream
+  program installed.
+- Codex sessions are logged by hook: `hook ... --agent codex` reads Codex's
+  session file, takes the address from Codex's config and the token from
+  `LUCID_TOKEN_CODEX`.
+- Where `setup` already installed the hooks, a plugin's copy stands aside,
+  and `doctor` says which route is in use.
+- The session record notes a picture or file that was attached
+  (`[image image/png attached; its contents are not stored]`) instead of
+  dropping it silently.
+- `CLAUDE_CONFIG_DIR` is honoured when looking for Claude Code's settings.
+
 ## 0.10.0 (2026-11-12)
 
 - Full session records. The Claude Code stop hook now also sends what was
