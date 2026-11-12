@@ -24,10 +24,13 @@ jobs:
   # anything that looks like a secret is ever committed.
   secrets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      # Pinned to a commit: a tag on someone else's action can be moved.
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ github.token }}
