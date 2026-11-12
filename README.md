@@ -44,11 +44,12 @@ The same server carries messages. Any agent can send one to another, or to
 one particular session of it, and an idle session wakes up to read it.
 
 <p align="center">
-  <img src="docs/grok-bot.png" width="720" alt="Grok Bot's own window: the user asks it to ask Claude session 2 whether the tests are passing; Grok Bot says it is asking, then reports that session 2 says 84 passed and 0 failed.">
+  <img src="docs/grok-bot.png" width="820" alt="Grok Bot's window: the user asks what was decided about the release and the bot answers from the shared memory; then the user asks it to ask Claude session 2 whether the tests are passing, and it reports that session 2 says 84 passed and 0 failed.">
 </p>
 
-That is Grok Bot's own window, uncut and unedited apart from the crop. Grok
-Bot is a separate app from Grok; here it is asked something only a Claude
+That is Grok Bot's own window. The bot, project and account names and the
+messages were replaced with generic ones for this page; the second exchange
+is one that really ran, shortened here. Grok Bot is a separate app from Grok; here it is asked something only a Claude
 Code session on another machine can answer. It sends the question to that
 session, which wakes, runs the tests and replies; a webhook wakes Grok Bot
 with the answer. The other direction, a Claude session starting the
