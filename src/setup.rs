@@ -92,6 +92,120 @@ pub fn merge(settings: &Value, plan: &Plan) -> (Value, Vec<String>) {
     (out, added)
 }
 
+/// True for a hook entry that `setup` (or the README) added.
+fn is_ours(hook: &Value) -> bool {
+    hook["command"]
+        .as_str()
+        .is_some_and(|c| c.contains("lucid-dream") && c.contains(" hook "))
+}
+
+/// The settings file with everything lucid-dream added taken out again, and
+/// what was removed. Everything else is left exactly as it was.
+pub fn unmerge(settings: &Value) -> (Value, Vec<String>) {
+    let mut out = settings.clone();
+    let mut removed = Vec::new();
+    let Some(root) = out.as_object_mut() else {
+        return (out, removed);
+    };
+    if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
+        for key in ["LUCID_URL", "LUCID_TOKEN"] {
+            if env.shift_remove(key).is_some() {
+                removed.push(format!("env {key}"));
+            }
+        }
+        if env.is_empty() && !removed.is_empty() {
+            root.shift_remove("env");
+        }
+    }
+    if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+        // Events this empties are dropped; ones that were empty before stay.
+        let mut emptied = Vec::new();
+        for (event, groups) in hooks.iter_mut() {
+            let Some(groups) = groups.as_array_mut() else {
+                continue;
+            };
+            let found = removed.len();
+            groups.retain_mut(|group| {
+                let Some(list) = group["hooks"].as_array_mut() else {
+                    return true;
+                };
+                let before = list.len();
+                for hook in list.iter().filter(|h| is_ours(h)) {
+                    let command = hook["command"].as_str().unwrap_or("");
+                    let name = command.rsplit(" hook ").next().unwrap_or("");
+                    removed.push(format!("hook {event}: {name}"));
+                }
+                list.retain(|h| !is_ours(h));
+                // Drop a group only when taking our hooks out is what emptied it.
+                !(list.is_empty() && before > 0)
+            });
+            if groups.is_empty() && removed.len() > found {
+                emptied.push(event.clone());
+            }
+        }
+        let any = !emptied.is_empty();
+        for event in emptied {
+            hooks.shift_remove(&event);
+        }
+        if hooks.is_empty() && any {
+            root.shift_remove("hooks");
+        }
+    }
+    (out, removed)
+}
+
+/// Take lucid-dream out of Claude Code on this machine, or with `dry` only
+/// say what would go. The memory and the binary are not touched.
+pub fn uninstall(settings: &Path, dry: bool) -> Result<(), String> {
+    println!("Claude Code settings: {}", settings.display());
+    let removed = match fs::read_to_string(settings) {
+        Ok(text) => {
+            let existing: Value = serde_json::from_str(&text).map_err(|e| {
+                format!(
+                    "{} is not valid JSON ({e}); fix it first",
+                    settings.display()
+                )
+            })?;
+            let (cleaned, removed) = unmerge(&existing);
+            if !dry && !removed.is_empty() {
+                write_settings(settings, &cleaned, "json.bak-before-lucid-uninstall")?;
+            }
+            removed
+        }
+        Err(_) => Vec::new(),
+    };
+    if removed.is_empty() {
+        println!("  nothing of lucid-dream's is in it");
+    }
+    for line in &removed {
+        println!("  - {line}");
+    }
+    if dry {
+        println!("  - MCP server registration `lucid-dream`, if present");
+        println!("Nothing was changed (--plan).");
+        return Ok(());
+    }
+    match Command::new("claude")
+        .args(["mcp", "remove", "--scope", "user", "lucid-dream"])
+        .output()
+    {
+        Ok(out) if out.status.success() => println!("MCP server: removed"),
+        Ok(_) => println!("MCP server: was not registered"),
+        Err(_) => println!(
+            "MCP server: `claude` is not on the PATH; if it is registered, run:\n  claude mcp \
+             remove --scope user lucid-dream"
+        ),
+    }
+    let exe = std::env::current_exe()
+        .map(|e| e.display().to_string())
+        .unwrap_or_default();
+    println!(
+        "Done. Sessions already open keep their hooks until they end. The memory store was not \
+         touched; to remove the program itself, delete {exe}"
+    );
+    Ok(())
+}
+
 fn object<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
     let slot = parent.entry(key).or_insert_with(|| json!({}));
     if !slot.is_object() {
@@ -124,7 +238,7 @@ pub fn run(plan: &Plan, dry: bool) -> Result<(), String> {
         return Ok(());
     }
     if !added.is_empty() {
-        write_settings(&plan.settings, &merged)?;
+        write_settings(&plan.settings, &merged, "json.bak-before-lucid-setup")?;
     }
     register_mcp(plan);
     println!(
@@ -134,14 +248,14 @@ pub fn run(plan: &Plan, dry: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn write_settings(file: &Path, merged: &Value) -> Result<(), String> {
+fn write_settings(file: &Path, merged: &Value, backup: &str) -> Result<(), String> {
     let io = |e: std::io::Error| format!("{}: {e}", file.display());
     if let Some(dir) = file.parent() {
         fs::create_dir_all(dir).map_err(io)?;
     }
     // Both files hold this device's token, so only their owner may read them.
     if file.exists() {
-        let backup = file.with_extension("json.bak-before-lucid-setup");
+        let backup = file.with_extension(backup);
         if backup.exists() {
             owner_only(&backup);
         } else {
@@ -247,6 +361,29 @@ mod tests {
         assert_eq!(start[1]["asyncRewake"], true);
         assert!(start[0].get("asyncRewake").is_none());
         assert_eq!(merge(&merged, &plan()).1, Vec::<String>::new());
+    }
+
+    #[test]
+    fn uninstall_takes_out_only_what_setup_added() {
+        let before = json!({
+            "model": "opus",
+            "env": { "OTHER": "1" },
+            "hooks": {
+                "SessionStart": [
+                    { "matcher": "compact", "hooks": [{ "type": "command", "command": "mine" }] }
+                ],
+                "PreToolUse": [{ "hooks": [] }]
+            }
+        });
+        let (installed, _) = merge(&before, &plan());
+        let (cleaned, removed) = unmerge(&installed);
+        assert_eq!(cleaned, before);
+        assert_eq!(removed.len(), 7);
+        assert_eq!(unmerge(&cleaned).1, Vec::<String>::new());
+
+        // With nothing else in the file, the sections we made go too.
+        let (installed, _) = merge(&json!({ "model": "opus" }), &plan());
+        assert_eq!(unmerge(&installed).0, json!({ "model": "opus" }));
     }
 
     #[test]

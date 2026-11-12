@@ -66,7 +66,28 @@ and keeps a backup of your settings):
 ```bash
 lucid-dream setup --url http://<pc-name>:7878/mcp
 ```
- Or build it: `cargo install --git
+
+Three more commands look after an install:
+
+```bash
+lucid-dream doctor
+```
+
+```bash
+lucid-dream upgrade
+```
+
+```bash
+lucid-dream uninstall
+```
+
+`doctor` checks the version, the hooks, the token and the server, and changes
+nothing; add `--root <memory dir>` on the machine that holds the memory.
+`upgrade` replaces the program with the latest release after verifying its
+checksum. `uninstall` takes out exactly what `setup` added and leaves the
+memory alone; `--plan` shows it first.
+
+Or build it: `cargo install --git
 https://github.com/jksim26/lucid-dream`. Then
 [set up the machine that holds the memory](#set-up-the-pc-that-holds-the-memory)
 and [connect the agents](#connect-the-agents).
@@ -311,7 +332,12 @@ an agent with [this prompt](src/dream_prompt.md), and commits the result
 `--dry-run` shows what it would do.
 
 - The agent is `claude -p` with edits allowed and only `git mv` and `mkdir` as
-  commands. Set `LUCID_DREAM_CMD` to use another one; the prompt is appended.
+  commands. It runs on your Claude subscription; no API key is needed. Set
+  `LUCID_DREAM_CMD` to use another one; the prompt is appended.
+- List several agents with `||` and dream tries them in order, so a night when
+  one is out of quota still gets its dream:
+  `LUCID_DREAM_CMD="claude || codex exec --full-auto"`. A bare `claude` keeps
+  the built-in tool limits. Only Claude has been tried so far.
 - If the agent deletes a file instead of archiving it, dream puts the file back
   and says so in the commit message.
 - If the agent fails, tracked files are restored and nothing is committed.
@@ -350,7 +376,7 @@ the server.
 | `LUCID_BIND` | serve | Listen address (default `127.0.0.1:7878`) |
 | `LUCID_URL` | hooks, import | Server endpoint, e.g. `http://<pc-name>:7878/mcp` |
 | `LUCID_TOKEN` | hooks, import | This device's agent token |
-| `LUCID_DREAM_CMD` | dream | Agent command; the prompt is appended |
+| `LUCID_DREAM_CMD` | dream | Agent command; the prompt is appended. Several, separated by `\|\|`, are tried in order |
 | `LUCID_DEBUG` | hooks | Print why a hook did nothing |
 | `LUCID_WEBHOOK_AUTH` | webhook set | The webhook's `Authorization` value |
 | `LUCID_CHANNEL_POLL` | channel | Seconds between fallback checks (default 20) |

@@ -2,6 +2,7 @@
 
 mod channel;
 mod client;
+mod doctor;
 mod dream;
 mod hooks;
 mod http;
@@ -12,6 +13,7 @@ mod setup;
 mod store;
 mod tokens;
 mod trust;
+mod upgrade;
 mod util;
 mod webhook;
 
@@ -60,6 +62,13 @@ On any device:
   lucid-dream setup --url URL [--plan]           connect Claude Code on this machine: adds
                                                 the hooks and the MCP server (token from
                                                 LUCID_TOKEN, or typed in); --plan only shows
+  lucid-dream doctor [--root <dir>] [--url URL]  check this machine's connection, hooks and
+                                                version, and the store when given; changes
+                                                nothing
+  lucid-dream upgrade [--check]                 replace this program with the latest release
+                                                (checksum verified); --check only looks
+  lucid-dream uninstall [--plan]                take the hooks and the MCP server back out of
+                                                Claude Code; the memory is not touched
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
   lucid-dream hook wait [--url URL]             wait for a message, then wake the session
@@ -75,7 +84,9 @@ Environment:
   LUCID_BIND       listen address, instead of --bind (default 127.0.0.1:7878)
   LUCID_URL        server endpoint for hooks and import, e.g. http://my-pc:7878/mcp
   LUCID_TOKEN      this device's agent token, for hooks and import
-  LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p)
+  LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p).
+                   Several, separated by ||, are tried in order until one succeeds,
+                   e.g. \"claude || codex exec --full-auto\"
 
 lucid-dream --version prints the installed version.
 ";
@@ -111,6 +122,9 @@ fn main() -> ExitCode {
         "who" => cmd_who(raw),
         "trust" => cmd_trust(raw),
         "setup" => cmd_setup(raw),
+        "uninstall" => cmd_uninstall(raw),
+        "upgrade" => cmd_upgrade(raw),
+        "doctor" => return cmd_doctor(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
     match result {
@@ -354,6 +368,58 @@ fn cmd_who(raw: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Claude Code's user settings file, or the one named with `--settings`.
+fn settings_file(args: &Args) -> Result<PathBuf, String> {
+    match args.option("--settings") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => {
+            let home = env("HOME")
+                .or_else(|| env("USERPROFILE"))
+                .ok_or("no home folder; pass --settings <file>")?;
+            Ok(PathBuf::from(home).join(".claude").join("settings.json"))
+        }
+    }
+}
+
+/// Take lucid-dream back out of Claude Code on this machine.
+fn cmd_uninstall(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--settings"], &["--plan"])?;
+    setup::uninstall(&settings_file(&args)?, args.switches.contains("--plan"))
+}
+
+fn cmd_upgrade(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &[], &["--check", "--force"])?;
+    upgrade::run(
+        args.switches.contains("--check"),
+        args.switches.contains("--force"),
+    )
+}
+
+/// Check this machine's setup. Exits with failure when something is broken.
+fn cmd_doctor(raw: Vec<String>) -> ExitCode {
+    let checked = (|| -> Result<bool, String> {
+        let args = Args::parse(raw, &["--root", "--url", "--settings"], &["--offline"])?;
+        let root = args
+            .option("--root")
+            .or_else(|| env("LUCID_ROOT"))
+            .map(PathBuf::from);
+        Ok(doctor::run(&doctor::Options {
+            settings: &settings_file(&args)?,
+            url: args.option("--url"),
+            root: root.as_deref(),
+            offline: args.switches.contains("--offline"),
+        }))
+    })();
+    match checked {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(message) => {
+            eprintln!("lucid-dream: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Connect Claude Code on this machine to a memory server.
 fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(raw, &["--url", "--settings"], &["--plan"])?;
@@ -377,15 +443,7 @@ fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
     if token.is_empty() {
         return Err("no token given".into());
     }
-    let settings = match args.option("--settings") {
-        Some(path) => PathBuf::from(path),
-        None => {
-            let home = env("HOME")
-                .or_else(|| env("USERPROFILE"))
-                .ok_or("no home folder; pass --settings <file>")?;
-            PathBuf::from(home).join(".claude").join("settings.json")
-        }
-    };
+    let settings = settings_file(&args)?;
     let exe = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .display()

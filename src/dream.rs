@@ -40,18 +40,21 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let (program, args, stdin) = command(&today);
+    let attempts = commands(&today);
     if dry_run {
         println!("would dream over {inbox} inbox notes in {}", root.display());
-        let flags: Vec<&str> = args
-            .iter()
-            .map(String::as_str)
-            .filter(|a| !a.contains('\n'))
-            .collect();
-        println!(
-            "would run: {program} {} (with the dream prompt)",
-            flags.join(" ")
-        );
+        for (i, (program, args, _)) in attempts.iter().enumerate() {
+            let flags: Vec<&str> = args
+                .iter()
+                .map(String::as_str)
+                .filter(|a| !a.contains('\n'))
+                .collect();
+            let when = if i == 0 { "would run" } else { "if that fails" };
+            println!(
+                "{when}: {program} {} (with the dream prompt)",
+                flags.join(" ")
+            );
+        }
         return Ok(());
     }
 
@@ -69,17 +72,7 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     }
 
     println!("dreaming over {inbox} inbox notes...");
-    let status = run_agent(&program, &args, stdin.as_deref(), root)
-        .map_err(|e| format!("cannot run {program}: {e}"))?;
-    if !status.success() {
-        // Undo edits to tracked files. Untracked files stay, so a note that
-        // arrived while dreaming is never lost.
-        git(root, &["reset", "-q"])?;
-        git(root, &["checkout", "--", "."])?;
-        return Err(format!(
-            "{program} failed ({status}); memory left as it was"
-        ));
-    }
+    first_success(&attempts, root)?;
 
     git(root, &["add", "-A"])?;
     let restored = restore_deleted(root)?;
@@ -117,27 +110,70 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The agent to run, its arguments, and what to feed its stdin. Claude gets the
-/// prompt on stdin, which survives any shell or `.cmd` shim unchanged.
-/// LUCID_DREAM_CMD replaces the default, with the prompt appended as its final
-/// argument (e.g. `codex exec --full-auto`).
-fn command(today: &str) -> (String, Vec<String>, Option<String>) {
+/// One agent to try: its program, arguments, and what to feed its stdin.
+type Attempt = (String, Vec<String>, Option<String>);
+
+/// The agents to try, in order. The default is Claude alone. LUCID_DREAM_CMD
+/// replaces it, and may list several commands separated by `||`; the next is
+/// tried when one fails, e.g. `claude || codex exec --full-auto`.
+fn commands(today: &str) -> Vec<Attempt> {
+    let custom = std::env::var("LUCID_DREAM_CMD").unwrap_or_default();
+    attempts(&custom, today)
+}
+
+fn attempts(custom: &str, today: &str) -> Vec<Attempt> {
     let prompt = format!("Today is {today}.\n\n{PROMPT}");
-    let custom = std::env::var("LUCID_DREAM_CMD")
-        .ok()
-        .filter(|v| !v.trim().is_empty());
-    if let Some(custom) = custom {
-        let mut parts = custom.split_whitespace().map(str::to_string);
-        let program = parts.next().unwrap_or_default();
-        let mut args: Vec<String> = parts.collect();
-        args.push(prompt);
-        return (program, args, None);
+    let mut list: Vec<Attempt> = custom
+        .split("||")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            // A bare `claude` means the built-in command with its tool allowlist.
+            if c == "claude" {
+                return claude(&prompt);
+            }
+            let mut parts = c.split_whitespace().map(str::to_string);
+            let program = parts.next().unwrap_or_default();
+            let mut args: Vec<String> = parts.collect();
+            // The prompt is the last argument, as e.g. `codex exec` expects.
+            args.push(prompt.clone());
+            (program, args, None)
+        })
+        .collect();
+    if list.is_empty() {
+        list.push(claude(&prompt));
     }
+    list
+}
+
+/// Claude gets the prompt on stdin, which survives any shell or `.cmd` shim
+/// unchanged, and may only edit files and move them.
+fn claude(prompt: &str) -> Attempt {
     let mut args: Vec<String> = ["-p", "--permission-mode", "acceptEdits", "--allowedTools"]
         .map(str::to_string)
         .into();
     args.extend(CLAUDE_TOOLS.map(str::to_string));
-    ("claude".to_string(), args, Some(prompt))
+    ("claude".to_string(), args, Some(prompt.to_string()))
+}
+
+/// Try each agent in turn: when the first is out of quota or not installed,
+/// the next one dreams instead. A failed attempt's edits are undone first.
+fn first_success(attempts: &[Attempt], root: &Path) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for (program, args, stdin) in attempts {
+        let failure = match run_agent(program, args, stdin.as_deref(), root) {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => format!("{program} failed ({status})"),
+            Err(e) => format!("cannot run {program}: {e}"),
+        };
+        // Undo edits to tracked files. Untracked files stay, so a note that
+        // arrived while dreaming is never lost.
+        git(root, &["reset", "-q"])?;
+        git(root, &["checkout", "--", "."])?;
+        eprintln!("{failure}");
+        failures.push(failure);
+    }
+    Err(format!("{}; memory left as it was", failures.join("; ")))
 }
 
 fn run_agent(
@@ -238,7 +274,9 @@ mod tests {
 
     #[test]
     fn the_default_agent_gets_the_dated_prompt_and_a_tool_allowlist() {
-        let (program, args, stdin) = command("2026-11-11");
+        let list = attempts("", "2026-11-11");
+        assert_eq!(list.len(), 1);
+        let (program, args, stdin) = list.into_iter().next().unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args[0], "-p");
         assert!(stdin
@@ -247,6 +285,62 @@ mod tests {
         assert!(args.iter().all(|a| !a.contains('\n')));
         assert!(args.contains(&"Bash(git mv *)".to_string()));
         assert!(!args.iter().any(|a| a == "Bash" || a.contains("bypass")));
+    }
+
+    #[test]
+    fn a_list_of_agents_is_tried_in_order() {
+        let list = attempts("claude || codex exec --full-auto ||", "2026-11-11");
+        assert_eq!(list.len(), 2);
+        // The bare name keeps Claude's allowlist and stdin prompt.
+        assert!(list[0].1.contains(&"--allowedTools".to_string()) && list[0].2.is_some());
+        assert_eq!(list[1].0, "codex");
+        assert_eq!(list[1].1[..2], ["exec", "--full-auto"]);
+        assert!(list[1].1[2].starts_with("Today is 2026-11-11.") && list[1].2.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_next_agent_dreams_when_the_first_fails() {
+        let t = Temp::new();
+        let store = t.0.join("store");
+        init::run(&store).unwrap();
+        git(&store, &["config", "user.email", "test@example.invalid"]).unwrap();
+        git(&store, &["config", "user.name", "test"]).unwrap();
+        fs::write(store.join("inbox/a.md"), "note a\n").unwrap();
+        git(&store, &["add", "-A"]).unwrap();
+        git(&store, &["commit", "-q", "-m", "intake"]).unwrap();
+
+        fs::write(store.join("notes/keep.md"), "before\n").unwrap();
+        git(&store, &["add", "-A"]).unwrap();
+        git(&store, &["commit", "-q", "-m", "keep"]).unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let script = |name: &str, body: &str| {
+            let file = t.0.join(name);
+            fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+            file.display().to_string()
+        };
+        // The first agent spoils a tracked file and fails; the second succeeds.
+        let bad = script("bad.sh", "echo spoiled > notes/keep.md; exit 3");
+        let good = script("good.sh", "echo dreamt > notes/dreamt.md");
+        let list = attempts(
+            &format!("{bad} || missing-agent-xyz || {good}"),
+            "2026-11-11",
+        );
+        first_success(&list, &store).unwrap();
+        assert_eq!(
+            fs::read_to_string(store.join("notes/keep.md")).unwrap(),
+            "before\n"
+        );
+        assert!(store.join("notes/dreamt.md").exists());
+
+        let failed = first_success(&attempts(&bad, "2026-11-11"), &store).unwrap_err();
+        assert!(failed.contains("memory left as it was"), "{failed}");
+        assert_eq!(
+            fs::read_to_string(store.join("notes/keep.md")).unwrap(),
+            "before\n"
+        );
     }
 
     #[test]

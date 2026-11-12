@@ -19,3 +19,15 @@ jobs:
           git config --global user.email ci@example.invalid
       - run: cargo test
       - run: cargo clippy --all-targets -- -D warnings
+
+  # The repository is public and the program handles tokens: fail the build if
+  # anything that looks like a secret is ever committed.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

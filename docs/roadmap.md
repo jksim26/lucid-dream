@@ -4,8 +4,7 @@ Source: the Lucid Dream Roadmap board, https://claude.ai/artifact/A9MQA4ajBmiFMY
 
 ## Build order
 
-Everything below is built and tested on a Mac. What is left is deployment: running
-the server on the Windows PC and pointing each agent at it (see the README).
+Everything ticked below is built, tested and running on a Windows PC and a Mac.
 
 - [x] **1. Repo + read server**: folder skeleton, MCP read tools
 - [x] **2. Write tools + voices**: `remember` and `log`, one token per agent, `source` + `said_by`
@@ -28,12 +27,18 @@ the server on the Windows PC and pointing each agent at it (see the README).
 - [x] **13. Trusted messengers and setup** (added 2026-11-12): `trust add <agent>` for
   requests relayed on your behalf; `setup` wires Claude Code in one command
 
-Not done anywhere yet:
+- [x] **14. Looking after an install** (added 2026-11-12): `doctor`, `upgrade` and
+  `uninstall`; dream falls back to a second agent when the first fails
 
-- [ ] Run the server on the Windows PC and connect Claude on Windows
-- [ ] Connect the Mac, install the hooks, import old memory
-- [ ] Open the doors: start each one, put a tunnel in front, add the connector
-- [ ] Schedule the nightly dream after a week of reviewing its diffs by hand
+Not done yet:
+
+- [ ] Schedule the nightly dream (it has only been run by hand)
+- [ ] Try dream with an agent other than Claude (Codex first)
+- [ ] Connect Codex with its own token
+- [ ] Try `install.ps1` and `setup` on Windows from scratch
+- [ ] Handoffs: a message with one owner, claimed exactly once
+- [ ] Indexed full-text search, once scanning files gets slow
+- [ ] A session-start index with a size budget, as the memory grows
 
 ## Voice rules
 

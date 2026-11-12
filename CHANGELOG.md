@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (2026-11-12)
+
+- `lucid-dream doctor` checks the version, hooks, token, server and (with
+  `--root`) the memory store, and says what to fix. It changes nothing.
+- `lucid-dream upgrade` replaces the program with the latest release after
+  verifying its checksum; `--check` only looks.
+- `lucid-dream uninstall` takes out exactly what `setup` added, with a backup;
+  `--plan` shows it first. The memory is not touched.
+- Dream can fall back: `LUCID_DREAM_CMD` may list several agents separated by
+  `||`, tried in order until one succeeds.
+- CI scans every push for committed secrets.
+
 ## 0.4.2 (2026-11-12)
 
 - `setup` creates its temp and backup files owner-only from the start,
