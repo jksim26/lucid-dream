@@ -3,8 +3,10 @@
 //! `lucid-dream pair grok` prints a short code. The agent (or the relay it
 //! builds) sends that code to `/pair` once and gets its token back, so the
 //! user never copies a long-lived token by hand. A code works once, for a
-//! limited time, and only for the agent it was made for; a few wrong guesses
-//! cancel every code that is waiting.
+//! limited time, and only for the agent it was made for. A wrong guess costs
+//! the guesser nothing and the owner nothing: the code is far too long to
+//! guess before it expires, and cancelling it on wrong guesses would let any
+//! stranger cancel a setup in progress.
 //!
 //! Waiting codes live in `<root>/.lucid/pair/`, one file per agent and
 //! label, holding only the code's hash.
@@ -20,8 +22,6 @@ use crate::util::{sha256_hex, unix_now, valid_name};
 
 /// How long a code can be used, by default.
 pub const DEFAULT_MINUTES: i64 = 60;
-/// Wrong codes a waiting pairing survives before it is cancelled.
-const MAX_WRONG: i64 = 5;
 /// Letters and digits that are hard to confuse when read aloud or retyped.
 const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -66,7 +66,6 @@ pub fn create(root: &Path, agent: &str, label: &str, minutes: i64) -> Result<Str
     let entry = json!({
         "hash": sha256_hex(normal(&code).as_bytes()),
         "expires": unix_now() + minutes.clamp(1, 24 * 60) * 60,
-        "wrong": 0,
     });
     let path = file(root, agent, label);
     let io = |e: std::io::Error| format!("{}: {e}", path.display());
@@ -119,9 +118,8 @@ pub struct Paired {
 }
 
 /// Exchange a code for the token of the agent it was made for. `only`
-/// limits which agent may pair here, as on a door. A wrong code counts
-/// against every pairing that could have been meant, and the same answer is
-/// given whatever was wrong, so a guesser learns nothing.
+/// limits which agent may pair here, as on a door. The same answer is given
+/// whatever was wrong, so a guesser learns nothing.
 pub fn redeem(
     root: &Path,
     tokens: &Path,
@@ -134,7 +132,6 @@ pub fn redeem(
     let given = sha256_hex(normal(code).as_bytes());
     let now = unix_now();
     let mut matched = None;
-    let mut others = Vec::new();
     for entry in fs::read_dir(dir(root)).into_iter().flatten().flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -157,20 +154,9 @@ pub fn redeem(
         let hash = pairing["hash"].as_str().unwrap_or("");
         if same(hash.as_bytes(), given.as_bytes()) {
             matched = Some((path, agent.to_string(), label.to_string()));
-        } else {
-            others.push((path, pairing));
         }
     }
     let Some((path, agent, label)) = matched else {
-        for (path, mut pairing) in others {
-            let wrong = pairing["wrong"].as_i64().unwrap_or(0) + 1;
-            if wrong >= MAX_WRONG {
-                let _ = fs::remove_file(&path);
-            } else {
-                pairing["wrong"] = json!(wrong);
-                let _ = fs::write(&path, pairing.to_string());
-            }
-        }
         return Err(REFUSED.into());
     };
     // Used up before the token exists, so it can never be exchanged twice.
@@ -219,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn a_door_pairs_only_its_own_agent_and_wrong_codes_cancel() {
+    fn a_door_pairs_only_its_own_agent_and_wrong_guesses_cancel_nothing() {
         let t = Temp::new();
         let root = t.store().root().to_path_buf();
         let tokens = crate::tokens::path(&root);
@@ -227,20 +213,16 @@ mod tests {
         let chatgpt = create(&root, "chatgpt", "default", 60).unwrap();
         let grok_door = ("grok".to_string(), "default".to_string());
 
-        // ChatGPT's code is no use at Grok's door, and counts as a wrong guess there.
+        // ChatGPT's code is no use at Grok's door.
         assert!(redeem(&root, &tokens, Some(&grok_door), &chatgpt).is_err());
         assert!(redeem(&root, &tokens, Some(&grok_door), &grok).is_ok());
 
-        // Five wrong guesses cancel what is waiting.
-        for _ in 0..MAX_WRONG {
+        // Wrong guesses, however many, do not cancel a code that is waiting.
+        for _ in 0..50 {
             assert!(redeem(&root, &tokens, None, "LD-AAAAA-AAAAA-AAAAA").is_err());
         }
-        assert!(waiting(&root).is_empty());
-        assert!(redeem(&root, &tokens, None, &chatgpt).is_err());
-        assert!(Tokens::load(&tokens)
-            .unwrap()
-            .identify("anything")
-            .is_none());
+        assert_eq!(waiting(&root).len(), 1);
+        assert!(redeem(&root, &tokens, None, &chatgpt).is_ok());
     }
 
     #[test]

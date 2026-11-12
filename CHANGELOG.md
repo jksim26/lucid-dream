@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 (2026-11-12)
+
+- Wrong pairing guesses no longer cancel a waiting code, which let anyone
+  who could reach a door interrupt a setup. The code's length and expiry
+  are the protection.
+
 ## 0.9.0 (2026-11-12)
 
 - Pairing: `lucid-dream pair <agent>` makes a one-time code that the agent

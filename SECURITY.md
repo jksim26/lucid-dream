@@ -31,8 +31,9 @@ open a public issue for a vulnerability.
 - **Pairing.** `/pair` is the one thing a caller without a token may use: it
   exchanges a one-time code for the token of the agent the code was made
   for. Codes are 75 bits, stored as hashes, expire after 60 minutes, work
-  once, and at a door only for that door's agent. Five wrong guesses cancel
-  every waiting code, and a refusal never says why. A code is made only by
+  once, and at a door only for that door's agent. A refusal never says why,
+  and wrong guesses do not cancel a waiting code, so a stranger cannot
+  interrupt a setup. A code is made only by
   someone with file access to the store.
 - **Dreams on request.** Any agent with a token can start a dream through
   the `dream` tool, at most once every 30 minutes and one at a time. A dream

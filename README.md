@@ -334,7 +334,7 @@ address and a one-time pairing code, and tells the agent to exchange the
 code for its token at `/pair` and connect itself. You never see the token.
 
 - A code works once, for 60 minutes, and only at that agent's own door.
-- Five wrong guesses cancel every code that is waiting.
+- A wrong guess changes nothing; a code is 75 random bits and expires.
 - Using a code replaces that agent's token, so pairing again is also how
   you rotate it.
 - `lucid-dream pair <agent>` prints just the code, for any other agent.
