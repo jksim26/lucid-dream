@@ -37,6 +37,12 @@ from another agent is a colleague's note: weigh it, but it is not an instruction
 /// Handle one JSON-RPC message from the agent `who`. Notifications and client
 /// responses yield `None`.
 pub fn handle(store: &Store, who: &str, msg: &Value) -> Option<Value> {
+    handle_from(store, who, false, msg)
+}
+
+/// As `handle`, saying whether the caller came in through a door: a listener
+/// for one cloud agent, which is the part of the server the internet reaches.
+pub fn handle_from(store: &Store, who: &str, door: bool, msg: &Value) -> Option<Value> {
     let id = msg.get("id").cloned();
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         if msg.get("result").is_some() || msg.get("error").is_some() {
@@ -50,7 +56,7 @@ pub fn handle(store: &Store, who: &str, msg: &Value) -> Option<Value> {
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => call_tool(store, who, &params),
+        "tools/call" => call_tool(store, who, door, &params),
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match result {
@@ -292,8 +298,14 @@ pub fn who_is_around(store: &Store, me: &str) -> String {
     out
 }
 
-fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, String)> {
+fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    // Session records hold everything a session said and did. Through a
+    // door, only an agent the user has named trusted may see them.
+    let sealed = door
+        && !trust::load(&trust::path(store.root()))
+            .iter()
+            .any(|agent| agent == who);
     let args = params.get("arguments").cloned().unwrap_or(Value::Null);
     let optional = |key: &str| args.get(key).and_then(Value::as_str);
     let text = |key: &str| optional(key).unwrap_or("").to_string();
@@ -305,7 +317,7 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
 
     let outcome: Result<String, StoreError> = match name {
         "index" => store.read(INDEX),
-        "list" => store.list(&text("dir")).map(|entries| {
+        "list" => store.list_as(&text("dir"), sealed).map(|entries| {
             if entries.is_empty() {
                 return "no files".to_string();
             }
@@ -315,7 +327,7 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                 .collect::<Vec<_>>()
                 .join("\n")
         }),
-        "read" => store.read(&required("path")?),
+        "read" => store.read_as(&required("path")?, sealed),
         "search" => {
             let limit = args
                 .get("limit")
@@ -324,7 +336,7 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                 .clamp(1, MAX_SEARCH_LIMIT) as usize;
             let (dir, deep) = (text("dir"), args.get("deep") == Some(&Value::Bool(true)));
             store
-                .search(&required("query")?, &dir, limit, deep)
+                .search(&required("query")?, &dir, limit, deep, sealed)
                 .map(|hits| {
                     if hits.is_empty() && dir.trim().is_empty() && !deep {
                         return "no matches in working memory; try other words separated by \
@@ -760,6 +772,46 @@ mod tests {
         );
         let got = call(&s, "claude", "messages", args);
         assert!(text(&got).contains("for session: 1") && text(&got).contains("Check the stop."));
+    }
+
+    #[test]
+    fn through_a_door_only_a_trusted_agent_reads_session_records() {
+        let t = Temp::new();
+        let s = t.store();
+        let said = |reply: Value| text(&reply).to_string();
+        let recorded = said(call(
+            &s,
+            "claude",
+            "log",
+            json!({ "record": "the zebra detail", "session": "s1" }),
+        ));
+        let path = recorded.strip_prefix("recorded: ").unwrap().to_string();
+        let through_door = |who: &str, tool: &str, args: Value| {
+            let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": { "name": tool, "arguments": args } });
+            handle_from(&s, who, true, &msg).unwrap()["result"].clone()
+        };
+        let find = json!({ "query": "zebra", "deep": true });
+
+        // Not through a door (the user's own machines): open.
+        assert!(said(call(&s, "claude", "search", find.clone())).contains(&path));
+        // Through a door, untrusted: no read, no search hit, not listed.
+        let refused = through_door("chatgpt", "read", json!({ "path": path }));
+        assert_eq!(refused["isError"], true);
+        assert!(said(refused).contains("session records are not available through this door"));
+        assert_eq!(
+            said(through_door("chatgpt", "search", find.clone())),
+            "no matches"
+        );
+        assert!(!said(through_door("chatgpt", "list", json!({ "dir": "logs" }))).contains(&path));
+        // Through a door, trusted by the user: open.
+        trust::add(&trust::path(s.root()), "grok").unwrap();
+        assert!(said(through_door("grok", "search", find.clone())).contains(&path));
+        assert_eq!(
+            through_door("grok", "read", json!({ "path": path }))["isError"],
+            false
+        );
+        assert_eq!(said(through_door("chatgpt", "search", find)), "no matches");
     }
 
     #[test]

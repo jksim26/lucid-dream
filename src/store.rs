@@ -122,6 +122,20 @@ fn check_text(text: &str) -> Result<&str, StoreError> {
     Ok(text)
 }
 
+/// What a caller who may not see session records is told.
+pub const SEALED: &str = "session records are not available through this door; they hold \
+everything a session said and did, so only the user's own machines and trusted agents may read \
+them (the user can allow it with `lucid-dream trust add <agent>`). The session's summary, \
+beside the record, is available";
+
+/// True for a session's full record. The name is judged on the real file,
+/// after links and letter case are resolved, and anywhere in the name, so
+/// no other spelling of the path gets around it.
+fn is_record(real: &Path) -> bool {
+    real.file_name()
+        .is_some_and(|name| name.to_string_lossy().to_lowercase().contains(".record.md"))
+}
+
 /// A session id reduced to what is safe in a file name.
 fn session_label(session: &str) -> Option<String> {
     let label: String = session
@@ -193,7 +207,16 @@ impl Store {
     }
 
     pub fn read(&self, rel: &str) -> Result<String, StoreError> {
+        self.read_as(rel, false)
+    }
+
+    /// Read a file. `sealed` is true for a caller that may not see session
+    /// records: an agent that came in through a door and is not trusted.
+    pub fn read_as(&self, rel: &str, sealed: bool) -> Result<String, StoreError> {
         let path = self.resolve(rel)?;
+        if sealed && is_record(&path) {
+            return Err(StoreError::Invalid(SEALED.into()));
+        }
         let meta = fs::metadata(&path)?;
         if !meta.is_file() {
             return Err(StoreError::BadPath(format!("{rel} is not a file")));
@@ -205,10 +228,17 @@ impl Store {
     }
 
     /// Every file under `dir` (the whole store when empty), sorted by path.
+    #[cfg(test)]
     pub fn list(&self, dir: &str) -> Result<Vec<Entry>, StoreError> {
+        self.list_as(dir, false)
+    }
+
+    /// As `list`, leaving session records out for a `sealed` caller.
+    pub fn list_as(&self, dir: &str, sealed: bool) -> Result<Vec<Entry>, StoreError> {
         let start = self.resolve(dir)?;
         let mut files = Vec::new();
         self.walk(&start, &mut files)?;
+        files.retain(|file| !(sealed && is_record(file)));
         files.sort();
         files.truncate(MAX_LIST_ENTRIES);
         Ok(files
@@ -385,6 +415,7 @@ impl Store {
         dir: &str,
         limit: usize,
         deep: bool,
+        sealed: bool,
     ) -> Result<Vec<Hit>, StoreError> {
         let lowered = query.to_lowercase();
         let terms: Vec<&str> = lowered
@@ -407,7 +438,7 @@ impl Store {
                 .extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| SEARCHABLE.contains(&e.to_ascii_lowercase().as_str()));
-            if !searchable {
+            if !searchable || (sealed && is_record(&file)) {
                 continue;
             }
             let rel = self.rel(&file);
@@ -1424,12 +1455,12 @@ pub mod tests {
     fn searches_case_insensitively_with_a_limit() {
         let t = Temp::new();
         let s = t.store();
-        let hits = s.search("RUST", "", 10, false).unwrap();
+        let hits = s.search("RUST", "", 10, false, false).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!((hits[1].path.as_str(), hits[1].line), ("notes/rust.md", 1));
-        assert_eq!(s.search("rust", "", 1, false).unwrap().len(), 1);
-        assert!(s.search("  ", "", 10, false).unwrap().is_empty());
-        assert!(s.search(" , ", "", 10, false).unwrap().is_empty());
+        assert_eq!(s.search("rust", "", 1, false, false).unwrap().len(), 1);
+        assert!(s.search("  ", "", 10, false, false).unwrap().is_empty());
+        assert!(s.search(" , ", "", 10, false, false).unwrap().is_empty());
     }
 
     #[test]
@@ -1443,8 +1474,13 @@ pub mod tests {
             "Release rule: deploy after tests.\nWe ship it then.\n",
         )
         .unwrap();
-        assert!(s.search("deploy policy", "", 10, false).unwrap().is_empty());
-        let hits = s.search("Release, deploy , ship", "", 10, false).unwrap();
+        assert!(s
+            .search("deploy policy", "", 10, false, false)
+            .unwrap()
+            .is_empty());
+        let hits = s
+            .search("Release, deploy , ship", "", 10, false, false)
+            .unwrap();
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
         // z.md matches all three words, a.md one: z.md first despite its name.
         assert_eq!(paths, ["wiki/z.md", "wiki/z.md", "wiki/a.md"]);
@@ -1464,7 +1500,7 @@ pub mod tests {
             fs::write(t.0.join(dir).join("x.md"), "the zebra detail\n").unwrap();
         }
         let paths = |deep, dir| -> Vec<String> {
-            let hits = s.search("zebra", dir, 10, deep).unwrap();
+            let hits = s.search("zebra", dir, 10, deep, false).unwrap();
             hits.into_iter().map(|h| h.path).collect()
         };
         // Notes not yet dreamed are working memory; processed ones are not.
@@ -1472,6 +1508,51 @@ pub mod tests {
         assert_eq!(paths(true, "").len(), 4);
         // Naming a folder searches it, whichever layer it is in.
         assert_eq!(paths(false, "logs"), ["logs/2026-11-12/x.md"]);
+    }
+
+    #[test]
+    fn a_sealed_caller_cannot_list_read_or_search_session_records() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::from_unix(1_700_000_000);
+        let record = s.record("claude", "s1", "the zebra detail", &now).unwrap();
+        let log = Log {
+            source: "claude",
+            summary: "saw a zebra",
+            session: Some("s1"),
+            device: None,
+            project: None,
+        };
+        let summary = s.log(&log, &now).unwrap();
+
+        // Open callers see both; a sealed one sees the summary only.
+        assert!(s.read_as(&record, false).is_ok());
+        assert_eq!(s.search("zebra", "", 10, true, false).unwrap().len(), 2);
+        assert_eq!(s.list_as("logs", false).unwrap().len(), 2);
+        assert!(s.read_as(&summary, true).is_ok());
+        let sealed: Vec<String> = s
+            .search("zebra", "logs", 10, true, true)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        assert!(sealed.len() == 1 && sealed[0] == summary);
+        let listed = s.list_as("logs", true).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].path, summary);
+        // However the path is spelled.
+        for spelling in [
+            record.clone(),
+            record.to_uppercase().replace("LOGS", "logs"),
+            format!("./{record}"),
+            record.replace("logs/", "logs/./"),
+        ] {
+            match s.read_as(&spelling, true) {
+                Err(StoreError::Invalid(why)) => assert_eq!(why, SEALED),
+                Err(StoreError::NotFound(_)) => {} // a case-sensitive disk
+                other => panic!("{spelling}: {:?}", other.map(|_| "read")),
+            }
+        }
     }
 
     #[test]

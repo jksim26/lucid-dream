@@ -324,10 +324,21 @@ connection dropped. See
 [clients/claude-code](clients/claude-code#live-messages-channel).
 
 Session logs and records are scrubbed of anything that looks like a credential
-before they are sent, since they become memory every agent can read. A record
-holds what was typed, what the agent said, and each tool call with its result
-(long ones cut short), so it can contain anything that appeared in the
-session: keep that in mind before working with private material.
+before they are sent: known key formats, anything after `Bearer`, and
+random-looking strings of 20 characters or more. A password that looks like
+an ordinary word cannot be told apart from one, so the scrub is a net, not a
+guarantee.
+
+A record holds what was typed, what the agent said, and each tool call with
+its result (long ones cut short), so two limits apply to it:
+
+- **Doors.** An agent that reaches the server through a door cannot read,
+  list or search records unless you have named it trusted
+  (`lucid-dream trust add grok --root <dir>`). It still gets the summaries.
+  Your own machines and the dream are not limited.
+- **Off switch.** `lucid-dream record off` in a project folder stops that
+  machine sending records from it and every folder under it; `record on`
+  resumes. Summaries are still sent.
 
 ## Tokens and doors
 

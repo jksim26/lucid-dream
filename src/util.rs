@@ -145,9 +145,19 @@ pub fn redact(text: &str) -> String {
             continue;
         }
         let known = SECRET_PREFIXES.iter().any(|p| run.starts_with(p)) && run.len() >= 16;
-        let random_looking = run.len() >= 32
-            && run.bytes().any(|b| b.is_ascii_digit())
-            && run.bytes().any(|b| b.is_ascii_alphabetic());
+        let mixed = |part: &str| {
+            part.bytes().any(|b| b.is_ascii_digit())
+                && part.bytes().any(|b| b.is_ascii_alphabetic())
+        };
+        // From 32 characters any mix of letters and digits is hidden. From
+        // 20, a run is hidden when one unbroken stretch of it mixes them:
+        // that leaves names made of words (`test_session_reply_2`,
+        // `lucid-dream-windows-x64`) and hides a key.
+        let random_looking = (run.len() >= 32 && mixed(run))
+            || (run.len() >= 20
+                && run
+                    .split(['_', '-'])
+                    .any(|part| part.len() >= 12 && mixed(part)));
         out.push_str(if known || random_looking || after_bearer {
             "[redacted]"
         } else {
@@ -209,6 +219,20 @@ mod tests {
             redact(&format!("key={hex}")),
             format!("key={hex}").replace(hex, "[redacted]")
         );
+        // From 20 characters, a random-looking run goes; names made of words stay.
+        assert_eq!(
+            redact("key AKIAIOSFODNN7EXAMPLE1 here"),
+            "key [redacted] here"
+        );
+        assert_eq!(redact("pw=x9Kq2mVb7Lr4Tz8Wn3Pd"), "pw=[redacted]");
+        for kept in [
+            "test_session_reply_2_works",
+            "lucid-dream-windows-x64.exe",
+            "a_message_for_one_session_reaches_only_that_session",
+            "abc123def456ghi789j", // 19 characters
+        ] {
+            assert_eq!(redact(kept), kept);
+        }
         let prose = "Fix the login bug in src/store.rs at 2026-11-11T07:00:00Z please";
         assert_eq!(redact(prose), prose);
         assert_eq!(

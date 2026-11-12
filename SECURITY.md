@@ -26,7 +26,9 @@ open a public issue for a vulnerability.
   agent's decision under its own rules.
 - **Secrets.** Session logs and full session records are scrubbed of
   credential-shaped text before they are sent. A record still holds whatever
-  else appeared in the session, including tool output. A backup made with
+  else appeared in the session, including tool output, so records are not
+  served through a door except to an agent the user has named trusted, and
+  `lucid-dream record off` stops a project sending them at all. A backup made with
   `--backup-to` is an unencrypted copy of the memory; it holds no tokens. A webhook's `Authorization` value is read from an environment
   variable and stored outside git.
 

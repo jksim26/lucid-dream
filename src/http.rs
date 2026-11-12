@@ -236,7 +236,7 @@ fn respond(app: &App, headers: &HeaderMap, path_token: Option<&str>, body: &[u8]
         let reply = mcp::error(Value::Null, -32700, "parse error");
         return (StatusCode::BAD_REQUEST, Json(reply)).into_response();
     };
-    match mcp::handle(&app.store, &who, &msg) {
+    match mcp::handle_from(&app.store, &who, app.only.is_some(), &msg) {
         Some(reply) => Json(reply).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }

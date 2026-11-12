@@ -7,6 +7,7 @@
 //! sleeping PC or a missing network only means no memory this time.
 
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -163,13 +164,38 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
     };
     // The record is extra: it uses the time that is left, and what it does
     // not send now it sends after the next turn.
+    let off = input["cwd"]
+        .as_str()
+        .and_then(|cwd| record_off(Path::new(cwd)));
     if let Some(id) = input["session_id"].as_str().filter(|id| !id.is_empty()) {
         if let Ok(dir) = state_dir("record") {
             let mark = dir.join(crate::util::label(id));
-            let _ = send_record(client, id, &transcript, &mark, started + RECORD_BUDGET);
+            match off {
+                None => {
+                    let _ = send_record(client, id, &transcript, &mark, started + RECORD_BUDGET);
+                }
+                // Off: nothing is sent, and what was said while off is
+                // passed over for good, so turning records on again later
+                // does not send it after all.
+                Some(_) => {
+                    let _ = fs::write(&mark, transcript.lines().count().to_string());
+                }
+            }
         }
     }
     summary.map(|_| ())
+}
+
+/// The file that turns session records off for a project folder and
+/// everything under it. Summaries are still sent.
+pub const RECORD_OFF: &str = ".lucid-no-record";
+
+/// The marker that turns records off for `dir`, if it or a folder above it
+/// has one.
+pub fn record_off(dir: &Path) -> Option<std::path::PathBuf> {
+    dir.ancestors()
+        .map(|folder| folder.join(RECORD_OFF))
+        .find(|marker| marker.exists())
 }
 
 /// One transcript line, in Claude Code's shape. A Codex session file says
@@ -748,6 +774,26 @@ not json
             "\n### User T2\nCheck the tests\n[image attached; its contents are not stored]\n\
              - tool exec T3: \"cargo test\"\n  - result: 90 passed\n\n### Assistant T5\nAll pass.\n"
         );
+    }
+
+    #[test]
+    fn a_marker_turns_records_off_for_a_folder_and_all_under_it() {
+        let dir = std::env::temp_dir().join(format!("lucid-off-test-{}", std::process::id()));
+        let deep = dir.join("project/src/deep");
+        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(dir.join("other")).unwrap();
+        assert_eq!(record_off(&deep), None);
+        fs::write(dir.join("project").join(RECORD_OFF), "").unwrap();
+        assert_eq!(
+            record_off(&deep),
+            Some(dir.join("project").join(RECORD_OFF))
+        );
+        assert_eq!(
+            record_off(&dir.join("project")),
+            Some(dir.join("project").join(RECORD_OFF))
+        );
+        assert_eq!(record_off(&dir.join("other")), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -94,6 +94,9 @@ On any device:
                                                 (checksum verified); --check only looks
   lucid-dream uninstall [--plan]                take the hooks and the MCP server back out of
                                                 Claude Code; the memory is not touched
+  lucid-dream record off|on|status [<folder>]    stop (or resume) sending full session
+                                                records from that project folder on this
+                                                machine; summaries are still sent
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
   lucid-dream hook wait [--url URL]             wait for a message, then wake the session
@@ -152,6 +155,7 @@ fn main() -> ExitCode {
         "channel" => cmd_channel(raw),
         "who" => cmd_who(raw),
         "trust" => cmd_trust(raw),
+        "record" => cmd_record(raw),
         "setup" => cmd_setup(raw),
         "uninstall" => cmd_uninstall(raw),
         "upgrade" => cmd_upgrade(raw),
@@ -804,6 +808,58 @@ fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
 /// Name an agent the user's trusted messenger, or take that back. Only on
 /// the machine that holds the memory: it is the user's decision, not one an
 /// agent can make over the network.
+/// Turn full session records off or on for a project folder, on this
+/// machine. Off is a marker file in the folder; the hook that sends records
+/// looks for it there and in every folder above the session's.
+fn cmd_record(raw: Vec<String>) -> Result<(), String> {
+    const HOW: &str = "usage: lucid-dream record off|on|status [<project folder>]";
+    let args = Args::parse(raw, &[], &[])?;
+    let words: Vec<&str> = args.words.iter().map(String::as_str).collect();
+    let (action, dir) = match words.as_slice() {
+        [action] => (*action, std::env::current_dir().map_err(|e| e.to_string())?),
+        [action, dir] => (*action, PathBuf::from(dir)),
+        _ => return Err(HOW.into()),
+    };
+    if !dir.is_dir() {
+        return Err(format!("{} is not a folder", dir.display()));
+    }
+    let marker = dir.join(hooks::RECORD_OFF);
+    let io = |e: std::io::Error| format!("{}: {e}", marker.display());
+    match action {
+        "off" => {
+            std::fs::write(
+                &marker,
+                "lucid-dream: sessions in this folder send no full record\n",
+            )
+            .map_err(io)?;
+            println!(
+                "Records are off for {} and every folder under it ({} was added). Sessions \
+                 there still send their short summary. Records already stored stay where \
+                 they are.",
+                dir.display(),
+                hooks::RECORD_OFF
+            );
+        }
+        "on" => match std::fs::remove_file(&marker) {
+            Ok(()) => println!("Records are on again for {}", dir.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => match hooks::record_off(&dir) {
+                Some(above) => println!(
+                    "Records are off because of {}; turn them on in that folder",
+                    above.display()
+                ),
+                None => println!("Records were already on for {}", dir.display()),
+            },
+            Err(e) => return Err(io(e)),
+        },
+        "status" => match hooks::record_off(&dir) {
+            Some(marker) => println!("off, because of {}", marker.display()),
+            None => println!("on"),
+        },
+        _ => return Err(HOW.into()),
+    }
+    Ok(())
+}
+
 fn cmd_trust(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(raw, &["--root"], &[])?;
     let file = trust::path(args.store()?.root());
@@ -813,7 +869,8 @@ fn cmd_trust(raw: Vec<String>) -> Result<(), String> {
             trust::add(&file, agent)?;
             println!(
                 "{agent} is now a trusted messenger: other agents are told its requests may \
-                 be treated as yours for routine, undoable actions"
+                 be treated as yours for routine, undoable actions, and it may read \
+                 full session records through its door"
             );
             Ok(())
         }

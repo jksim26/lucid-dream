@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0 (2026-11-12)
+
+- Session records are sealed at the doors. An agent that comes in through a
+  door (the listeners the internet can reach) can no longer read, list or
+  search `.record.md` files unless the user has named it trusted with
+  `lucid-dream trust add <agent>`. Summaries, notes and pages are unchanged,
+  and the user's own machines and the dream see everything as before.
+- `lucid-dream record off|on|status [<folder>]` turns full records off for a
+  project folder on this machine (a `.lucid-no-record` marker). Summaries
+  are still sent.
+- The scrub now also hides random-looking strings from 20 characters, not
+  only from 32, while leaving names made of words alone.
+
 ## 0.11.0 (2026-11-12)
 
 - Plugins. This repository is now a plugin marketplace for Claude Code
