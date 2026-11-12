@@ -8,6 +8,10 @@
 [![CI](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml/badge.svg)](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+<p align="center">
+  <img src="docs/demo.svg" width="920" alt="One agent sends a message to Claude session 1; the idle session is woken about a quarter of a second later with the message.">
+</p>
+
 Claude, Codex, Grok and ChatGPT each live in their own app with their own
 memory, and none of them can reach another. lucid-dream is one small server
 you run on your own machine that gives them two things in common.
