@@ -1,6 +1,6 @@
 [package]
 name = "lucid-dream"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "One shared memory that every agent reads and dream tidies"
 license = "MIT"

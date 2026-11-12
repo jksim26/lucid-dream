@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 (2026-11-12)
+
+- Dream archives leftover inbox notes only when the agent actually wrote
+  something, so an agent that exits cleanly without working loses no notes.
+
 ## 0.5.1 (2026-11-12)
 
 - Dream archives the inbox notes itself when the agent could not, so it works

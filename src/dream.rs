@@ -74,7 +74,14 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     println!("dreaming over {inbox} inbox notes...");
     let noted = inbox_files(root);
     first_success(&attempts, root)?;
-    let archived = archive_inbox(root, &noted)?;
+    // An agent that exits cleanly having written nothing (out of quota, say)
+    // has not dreamt: leave its notes in the inbox for the next run.
+    let worked = !git(root, &["status", "--porcelain"])?.trim().is_empty();
+    let archived = if worked {
+        archive_inbox(root, &noted)?
+    } else {
+        Vec::new()
+    };
     if !archived.is_empty() {
         println!(
             "archived {} inbox note(s) the agent left behind",
