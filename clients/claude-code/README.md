@@ -23,7 +23,23 @@ Both hooks give up after 3 seconds and always exit cleanly, so a sleeping PC onl
 means a session without shared memory. To see why a hook did nothing, run it by
 hand with `LUCID_DEBUG=1`.
 
+## Live messages (waiting hook)
+
+The `hook wait` entries in the settings example make every session listen,
+including sessions in the desktop app. The hook runs in the background from
+session start and after each turn, stays connected to the server, and when a
+message arrives for the session it exits and Claude Code wakes the session with
+the message (`asyncRewake`). Nothing else has to be running.
+
+A message sent to the agent without a `session` wakes every waiting session;
+one sent with a session's number wakes only that one. `hook session-end` takes
+a closed session off the `who` list at once.
+
 ## Live messages (channel)
+
+The channel does the same job for a terminal session and predates the waiting
+hook; use one or the other.
+
 
 By default Claude sees messages from other agents when a session starts. With a
 channel, a message that arrives while a session is open is pushed into it and

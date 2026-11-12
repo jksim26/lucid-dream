@@ -190,7 +190,8 @@ fn tools() -> Value {
                     "title": { "type": "string", "description": "A few words on what the session is about, shown in `who`." },
                     "device": { "type": "string" },
                     "project": { "type": "string", "description": "The folder or project it works in." },
-                    "live": { "type": "boolean", "description": "True if this session is actively listening for messages." }
+                    "live": { "type": "boolean", "description": "True if this session is actively listening for messages." },
+                    "left": { "type": "boolean", "description": "True when the session has ended: with `id`, takes it off the list." }
                 }
             },
         },
@@ -237,10 +238,13 @@ pub fn who_is_around(store: &Store, me: &str) -> String {
             let state = if p.live {
                 "listening now, a message arrives within seconds".to_string()
             } else {
-                format!(
-                    "not listening, last seen {} min ago",
-                    (now - p.at).max(0) / 60
-                )
+                let minutes = (now - p.at).max(0) / 60;
+                let ago = match minutes {
+                    0..=119 => format!("{minutes} min"),
+                    120..=2879 => format!("{} hours", minutes / 60),
+                    _ => format!("{} days", minutes / 1440),
+                };
+                format!("not listening, last seen {ago} ago")
             };
             let about = match p.title.as_str() {
                 "" => String::new(),
@@ -411,6 +415,9 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                     out
                 })
         }
+        "check_in" if args.get("left").and_then(Value::as_bool) == Some(true) => store
+            .check_out(who, &text("id"))
+            .map(|()| "left".to_string()),
         "check_in" => store.check_in(&Presence {
             agent: who.to_string(),
             id: text("id"),

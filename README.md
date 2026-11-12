@@ -121,7 +121,11 @@ environment variable, so it never appears on a command line. `webhook test grok`
 sends a test nudge; `webhook list` and `webhook remove grok` manage it. The
 address and its secret are stored in `.lucid/webhooks.json`, outside git.
 
-**Channel, for a Claude Code session that is open** (research preview). The
+**Waiting hook, for any Claude Code session**, the desktop app included. A
+background hook waits for a message to its session and wakes the session with
+it; see [clients/claude-code](clients/claude-code#live-messages-waiting-hook).
+
+**Channel, for a Claude Code terminal session** (research preview). The
 `lucid-dream channel` helper stays connected to the server, which tells it the
 moment a message is sent; the helper fetches it and pushes it into the running
 session, in well under a second. It also checks every 20 seconds in case the
@@ -191,9 +195,10 @@ grok: woken by webhook
 
 `send` with `session: "2"` reaches that session only; without it, every
 session of that agent gets the message. A message reaches a listening session within a second. A session counts as listening while its
-[channel helper](clients/claude-code#live-messages-channel) has checked in
-within the last 90 seconds. A session unseen for a day drops off the list and
-its number goes to the next new session.
+waiting hook or channel helper has checked in within the last 90 seconds. A
+session that ends leaves the list at once; one that just goes quiet shows as
+"not listening" with when it was last seen, and drops off after three days. Its
+number then goes to the next new session.
 
 Each Claude Code session is told its number at start and asked to keep it at
 the front of its title, so in the app you see `#1 Agent memory repo`. The text

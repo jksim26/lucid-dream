@@ -53,6 +53,9 @@ On the machine that holds the memory:
 On any device:
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
+  lucid-dream hook wait [--url URL]             wait for a message, then wake the session
+                                                (Claude Code hook with asyncRewake)
+  lucid-dream hook session-end [--url URL]      take the session off the `who` list
   lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)
   lucid-dream who [--root <dir> | --url URL]    List the agents and their sessions
   lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
@@ -301,12 +304,18 @@ fn cmd_import(raw: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_channel(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--url"], &[])?;
-    let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
+/// How often a listener checks for messages when the server's signal does
+/// not reach it.
+fn poll_interval() -> Duration {
     let seconds = env("LUCID_CHANNEL_POLL")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(20);
+    Duration::from_secs(seconds.max(2))
+}
+
+fn cmd_channel(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--url"], &[])?;
+    let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
     let project = std::env::current_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
@@ -318,8 +327,7 @@ fn cmd_channel(raw: Vec<String>) -> Result<(), String> {
         "session": hooks::session_name(None), "id": id, "device": hooks::hostname(),
         "project": project, "live": true,
     });
-    channel::run(client, Duration::from_secs(seconds.max(2)), me)
-        .map_err(|e| format!("channel: {e}"))
+    channel::run(client, poll_interval(), me).map_err(|e| format!("channel: {e}"))
 }
 
 /// The session list, for the user: from the store on the PC that holds it,
@@ -409,6 +417,21 @@ fn hook(raw: Vec<String>) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             hooks::stop(&client, &input)
         }
-        _ => Err("usage: lucid-dream hook session-start | stop".into()),
+        // Run with `asyncRewake`: waits for a message, then wakes the session.
+        Some("wait") => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| e.to_string())?;
+            hooks::wait(std::sync::Arc::new(client), &input, poll_interval())
+        }
+        Some("session-end") => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| e.to_string())?;
+            hooks::session_end(&client, &input)
+        }
+        _ => Err("usage: lucid-dream hook session-start | stop | wait | session-end".into()),
     }
 }

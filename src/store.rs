@@ -400,7 +400,9 @@ pub struct Presence {
 
 /// A session counts as listening if it checked in this recently.
 pub const LISTENING_SECS: i64 = 90;
-const PRESENCE_KEPT_SECS: i64 = 24 * 3600;
+/// A session unseen for this long counts as ended: it leaves the list and
+/// its number is free again.
+const PRESENCE_KEPT_SECS: i64 = 3 * 24 * 3600;
 
 fn parse_message(path: String, body: &str) -> Option<Message> {
     let (head, text) = body.strip_prefix("---\n")?.split_once("\n---\n")?;
@@ -635,6 +637,17 @@ impl Store {
     }
 
     /// Sessions seen in the last day, listening ones first, then most recent.
+    /// A session that has ended leaves the list at once.
+    pub fn check_out(&self, agent: &str, id: &str) -> Result<(), StoreError> {
+        check_name("agent", agent)?;
+        let id = label(id);
+        if !id.is_empty() {
+            let dir = self.root.join(".lucid").join("presence").join(agent);
+            let _ = fs::remove_file(dir.join(format!("id-{id}.json")));
+        }
+        Ok(())
+    }
+
     pub fn who(&self, now: i64) -> Vec<Presence> {
         let mut found = Vec::new();
         let root = self.root.join(".lucid").join("presence");
@@ -843,7 +856,11 @@ mod message_tests {
             ("Agent memory repo", true)
         );
 
-        // A day after a session was last seen, it is off the list and its
+        // A session that says it has ended is off the list at once.
+        s.check_out("codex", "c").unwrap();
+        assert!(s.who(1031).iter().all(|p| p.agent != "codex"));
+
+        // Three days after a session was last seen, it is off the list and its
         // number goes to the next new session.
         let later = 1003 + PRESENCE_KEPT_SECS + 10;
         s.check_in(&p("claude", "a", true, later)).unwrap();

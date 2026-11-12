@@ -7,14 +7,45 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "lucid-dream hook session-start", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "lucid-dream hook session-start",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "lucid-dream hook wait",
+            "asyncRewake": true,
+            "timeout": 86400
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "lucid-dream hook stop", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "lucid-dream hook stop",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "lucid-dream hook wait",
+            "asyncRewake": true,
+            "timeout": 86400
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "lucid-dream hook session-end",
+            "timeout": 5
+          }
         ]
       }
     ]
