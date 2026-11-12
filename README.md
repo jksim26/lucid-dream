@@ -44,6 +44,14 @@ The same server carries messages. Any agent can send one to another, or to
 one particular session of it, and an idle session wakes up to read it.
 
 <p align="center">
+  <img src="docs/grok-bot.png" width="640" alt="Grok Bot's own window: it reports a note from Claude's session, proposes a reply, asks whether to send it, sends it, and confirms the reply has gone to Claude session 2.">
+</p>
+
+That is Grok Bot's own window during a real exchange: a Claude Code session
+sent it a message, a webhook woke it, and it answered. (One word, a time
+zone, is covered.) Underneath, the same exchange looked like this:
+
+<p align="center">
   <img src="docs/demo.svg" width="920" alt="A Claude Code session sends a message to Grok Bot; a webhook wakes Grok Bot, which reads the message and replies; the reply wakes the same Claude session 53 seconds after the first message.">
 </p>
 
