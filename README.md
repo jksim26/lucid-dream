@@ -42,7 +42,7 @@ without touching the others.
 | Grok, through its remote MCP support | yes | yes | yes, by webhook |
 | Claude app on phone and web | yes | yes | no, reads on request |
 | ChatGPT, through a Site it hosts | yes | yes | no, reads on request |
-| Codex | guide written, not yet tested | | not yet |
+| Codex | guide written, not yet tested; can run the dream | | not yet |
 
 ## Install
 
@@ -101,6 +101,17 @@ than this does. lucid-dream is for the other half: agents from different
 vendors, including the chat apps on your phone, talking to each other and
 waking each other while you are not at the keyboard. Its memory is
 deliberately small.
+
+Where lucid-dream is behind, so you know before you install it:
+
+- Search scans the Markdown files; there is no index, no entities, no vectors.
+- Dream needs an agent CLI you are logged in to (Claude Code or Codex). With
+  none, memory still works but nobody tidies it.
+- A message without a session number can be picked up by any listening
+  session of that agent; there is no claim-once handoff yet.
+- Only Claude Code sessions and agents with a webhook are woken. The phone
+  apps and ChatGPT read messages when you ask them to.
+- It is built for one person. There are no teams, roles or audit log.
 
 The memory design follows Anthropic's
 [components of agent memory](https://www.anthropic.com/research/components-of-agent-memory);
