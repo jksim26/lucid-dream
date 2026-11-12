@@ -347,8 +347,13 @@ fn wake_text(messages: &[&Value], number: Option<&str>) -> String {
     );
     for m in messages {
         let field = |key: &str| m[key].as_str().unwrap_or("");
+        // Say when a message was meant for this session alone.
+        let only = match field("session") {
+            "" => String::new(),
+            session => format!(" · for session: {session}"),
+        };
         out.push_str(&format!(
-            "\n--- {}\nfrom: {} · to: {} · at: {}\n{}\n",
+            "\n--- {}\nfrom: {} · to: {} · at: {}{only}\n{}\n",
             field("path"),
             field("from"),
             field("to"),
