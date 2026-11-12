@@ -1,26 +1,55 @@
 # lucid-dream
 
-> Your AI agents can message and wake each other, across vendors and devices,
-> and share one memory. Ask Grok on your phone to tell Claude on your PC
-> something; the Claude session wakes up and answers.
+> One memory for all your AI agents, tidied while you sleep. Claude, Grok,
+> ChatGPT and Codex remember the same things, and can talk to each other
+> while you are away.
 
 [![Release](https://img.shields.io/github/v/release/jksim26/lucid-dream)](https://github.com/jksim26/lucid-dream/releases/latest)
 [![CI](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml/badge.svg)](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+Claude, Codex, Grok and ChatGPT each live in their own app with their own
+memory, and none of them can reach another. So you repeat yourself to each
+one, and carry messages between them by hand. lucid-dream is one small
+server on your own machine that gives them two things in common.
+
+## Dream: one memory
+
+During the day, every agent drops notes into a shared inbox, and each session
+leaves a log of what happened. At night a **dream** reads both, corrects the
+notes against the logs, merges them into wiki pages, and rebuilds a small
+index. Every agent loads that index when its next session starts, on any
+device.
+
+<p align="center">
+  <img src="docs/memory-flow.svg" width="920" alt="Agents write notes and session logs during the day; a nightly dream checks the notes against the logs, merges them and builds wiki pages and an index; every session loads that index when it starts.">
+</p>
+
+- **It follows Anthropic's design.** Notes written in the moment, dreaming
+  that corrects and reorganises them offline, wiki pages as the lasting
+  form, and an index loaded up front are the parts described in
+  [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory).
+  lucid-dream applies them across vendors instead of inside one.
+- **Your words stay yours.** Every note records who said it. A decision of
+  yours is never mixed up with an agent's opinion, and wins over it.
+- **It is plain Markdown in git.** Read it, edit it, revert it. Each dream is
+  one commit, and nothing is ever deleted, only archived.
+- **It runs on what you already pay for.** The dream is done by Claude Code
+  or Codex on your subscription, at a time the server keeps itself. No API
+  key, no database, no scheduler.
+
+## Sleep talking: the agents reach each other
+
+The same server carries messages. Any agent can send one to another, or to
+one particular session of it, and an idle session wakes up to read it.
+
 <p align="center">
   <img src="docs/demo.svg" width="920" alt="One agent sends a message to Claude session 1; the idle session is woken about a quarter of a second later with the message.">
 </p>
 
-Claude, Codex, Grok and ChatGPT each live in their own app with their own
-memory, and none of them can reach another. lucid-dream is one small server
-you run on your own machine that gives them two things in common.
-
-**A bridge.** Any agent can send a message to another, or to one particular
-session of it. The recipient is woken within a second where its app allows
-it: a Claude Code session (terminal or desktop app) by a background hook, an
-agent with a webhook by a call that says only "you have a message". `who`
-lists every agent and session and which are listening:
+So you can ask Grok on your phone to have the Claude session on your PC run
+the tests, and get the answer back in Grok. `who` lists every agent and
+session and which are listening:
 
 ```
 claude:
@@ -30,15 +59,13 @@ grok: woken by webhook when a message arrives
 chatgpt: reads messages when it next looks
 ```
 
-**A memory.** Agents write notes to an add-only inbox over MCP. A "dream" job
-merges them into notes, a wiki and a small `MEMORY.md` index that every agent
-loads at session start. It is plain Markdown in git: read it, edit it, revert
-it. Each note keeps its voice, so your decisions are never confused with an
-agent's opinion.
+A Claude Code session (terminal or desktop app) is woken by a background
+hook, and an agent with a webhook by a call that says only "you have a
+message". A message goes to one session unless you ask for more.
 
-It is one Rust binary with no database. Each client gets its own token, and a
-cloud client such as a phone app gets its own door, so one can be cut off
-without touching the others.
+It is one Rust binary. Each client gets its own token, and a cloud client
+such as a phone app gets its own door, so one can be cut off without touching
+the others.
 
 | Agent | Memory | Sends | Woken when a message arrives |
 | --- | --- | --- | --- |
@@ -103,12 +130,12 @@ finish in one page.
 ## How it compares
 
 Most agent-memory projects, [ai-memory](https://github.com/akitaonrails/ai-memory)
-being the most complete, are about memory for coding agents: capture, search,
-handoff. If that is what you need, use one of them; they do far more of it
-than this does. lucid-dream is for the other half: agents from different
-vendors, including the chat apps on your phone, talking to each other and
-waking each other while you are not at the keyboard. Its memory is
-deliberately small.
+being the most complete, are memory for coding agents: capture, search,
+handoff. If you want the most capable memory for one coding agent, use one of
+them; they do far more of it than this does. lucid-dream is for a different
+case: one person with agents from several vendors, including the chat apps
+on a phone, who wants them to share one memory and to reach each other. Its
+memory is deliberately small and readable.
 
 Where lucid-dream is behind, so you know before you install it:
 
@@ -119,22 +146,26 @@ Where lucid-dream is behind, so you know before you install it:
   apps and ChatGPT read messages when you ask them to.
 - It is built for one person. There are no teams, roles or audit log.
 
-The memory design follows Anthropic's
-[components of agent memory](https://www.anthropic.com/research/components-of-agent-memory);
-[docs/references.md](docs/references.md) lists every project this borrows
-ideas from.
+[docs/references.md](docs/references.md) lists every project and article this
+borrows ideas from.
 
 ## How memory flows
 
-```
-Writers ──▶ inbox/ + logs/ ──▶ Dream (nightly) ──▶ notes/ wiki/ MEMORY.md ──▶ Readers
-Claude,     add-only via MCP,   merge, keep voices,   git history is the      all agents,
-Codex,      session summaries   archive, commit       undo; daily digest/     all devices
-Grok        from every device
-```
+The diagram [at the top](#dream-one-memory) is the whole flow. In the terms of
+Anthropic's [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory):
 
-One binary, `lucid-dream`, does all of it: it serves the memory, runs the dream,
-imports old memory, and is the hook each device calls.
+| Their component | Here |
+| --- | --- |
+| Memory notes, written when something is worth keeping | `remember` adds a note to `inbox/`, tagged with who said it |
+| Session logs, the record to check notes against | `logs/`, written by a hook or the `log` tool when a session ends |
+| Dreaming, which corrects mistakes and reorganises offline | `lucid-dream dream`, nightly, with the log as the better witness |
+| Memory representations such as a wiki | `wiki/` (one page per project, person, tool) and `notes/` |
+| What is loaded ahead of a session | `MEMORY.md`, the index, kept under 200 lines |
+
+What lucid-dream adds is that the writers and readers are different vendors'
+agents on different devices, so each note carries its voice and each agent
+its own token. One binary, `lucid-dream`, does all of it: it serves the
+memory, runs the dream, imports old memory, and is the hook each device calls.
 
 ## The memory store
 
@@ -359,7 +390,7 @@ Messages are handed over labelled as a colleague's notes, not as instructions
 from you. They are not memory either: dream reads them as evidence, like logs,
 and anything worth keeping still has to be remembered.
 
-## Dream
+## The dream job
 
 ```bash
 lucid-dream dream --root <memory dir>

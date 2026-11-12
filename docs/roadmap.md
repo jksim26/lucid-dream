@@ -39,6 +39,8 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
 Not done yet:
 
 - [ ] `service install`: start the server at login on Windows, macOS and Linux
+- [ ] A server that needs no home computer or tunnel: a container for a cloud host,
+  with the dream done by a connected agent over MCP
 
 - [ ] Walk the Grok + ChatGPT + Codex guide from scratch on Windows and Linux
 - [ ] Try `install.ps1` and `setup` on Windows from scratch

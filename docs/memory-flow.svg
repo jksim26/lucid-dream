@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 350" width="920" height="350" role="img" aria-label="How memory flows: agents write notes and session logs during the day; a nightly dream checks the notes against the logs, merges them and builds wiki pages and an index; every session loads that index when it starts.">
+<style>
+text{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;fill:#e6edf3;font-size:13.5px}
+.h{font-size:15px;font-weight:600}
+.d{fill:#8b949e;font-size:12.5px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;fill:#79c0ff}
+.box{fill:#161b22;stroke:#30363d}
+.line{stroke:#8b949e;stroke-width:1.5;fill:none}
+</style>
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8b949e"/></marker>
+</defs>
+<rect x="0.5" y="0.5" width="919" height="349" rx="12" fill="#0d1117" stroke="#30363d"/>
+
+<!-- 1 sessions -->
+<rect class="box" x="24" y="58" width="168" height="150" rx="10"/>
+<text class="h" x="40" y="86">Sessions</text>
+<text x="40" y="114">Claude · Grok</text>
+<text x="40" y="136">ChatGPT · Codex</text>
+<text class="d" x="40" y="166">any device,</text>
+<text class="d" x="40" y="184">through MCP</text>
+
+<!-- 2 raw material -->
+<rect class="box" x="246" y="58" width="196" height="150" rx="10"/>
+<text class="h" x="262" y="86">During the day</text>
+<text class="m" x="262" y="114">inbox/</text><text x="316" y="114">memory notes</text>
+<text class="d" x="262" y="132">what an agent chose to save</text>
+<text class="m" x="262" y="162">logs/</text><text x="308" y="162">session logs</text>
+<text class="d" x="262" y="180">what actually happened</text>
+
+<!-- 3 dream -->
+<rect x="496" y="46" width="196" height="174" rx="10" fill="#1f2a44" stroke="#58a6ff"/>
+<text class="h" x="512" y="74">Dream</text>
+<text class="d" x="512" y="94">every night, by Claude or Codex</text>
+<text x="512" y="124">checks notes against logs</text>
+<text x="512" y="146">merges, keeps who said what</text>
+<text x="512" y="168">builds wiki pages</text>
+<text x="512" y="190">archives, never deletes</text>
+
+<!-- 4 memory -->
+<rect class="box" x="746" y="58" width="150" height="150" rx="10"/>
+<text class="h" x="762" y="86">Memory</text>
+<text class="m" x="762" y="114">wiki/  notes/</text>
+<text class="d" x="762" y="132">one page per subject</text>
+<text class="m" x="762" y="162">MEMORY.md</text>
+<text class="d" x="762" y="180">the small index</text>
+
+<!-- arrows -->
+<path class="line" d="M192 133H240" marker-end="url(#a)"/>
+<text class="d" x="216" y="124" text-anchor="middle">write</text>
+<path class="line" d="M442 133H490" marker-end="url(#a)"/>
+<path class="line" d="M692 133H740" marker-end="url(#a)"/>
+<path class="line" d="M821 208V262Q821 272 811 272H118Q108 272 108 262V214" marker-end="url(#a)"/>
+<text x="464" y="264" text-anchor="middle">the index is loaded at the start of every session</text>
+
+<text class="d" x="460" y="318" text-anchor="middle">Notes, dreaming, wiki pages and a preloaded index, after Anthropic's “The components of agent memory”.</text>
+<text class="d" x="460" y="336" text-anchor="middle">Plain Markdown in git: every dream is one commit you can read or revert.</text>
+</svg>

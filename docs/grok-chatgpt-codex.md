@@ -79,6 +79,12 @@ Your addresses are now:
 - Grok: `https://<computer>.<tailnet>.ts.net:8443/mcp`
 - ChatGPT: `https://<computer>.<tailnet>.ts.net:10000/mcp`
 
+Tailscale is what this was tried with, not a requirement. Each door is plain
+HTTP on your own computer, so any tunnel that puts a stable HTTPS address in
+front of it works the same way (a Cloudflare Tunnel with your own domain, for
+example). Avoid tunnels whose address changes on every start: you would have
+to re-enter it in Grok and ChatGPT each time.
+
 `tailscale funnel status` shows the exact names. To check one, open
 `https://<computer>.<tailnet>.ts.net:8443/health` in your phone's browser on
 mobile data; it should say `ok`.
