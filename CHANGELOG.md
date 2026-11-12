@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 (2026-11-12)
+
+- `lucid-dream quickstart <dir> --agents grok,chatgpt,codex` creates the
+  store, issues a token per agent and prints the commands to run next.
+- `serve --doors grok=7882,chatgpt=7883` runs the main server and a door per
+  cloud agent in one process.
+- A start-to-finish guide for people without Claude:
+  docs/grok-chatgpt-codex.md. The ChatGPT guide now states the Sites limits.
+- Codex works as a memory client (tried with Codex CLI 0.164).
+- `doctor` is useful on a machine without Claude Code or a token: it checks
+  the store and that the server answers.
+
 ## 0.5.2 (2026-11-12)
 
 - Dream archives leftover inbox notes only when the agent actually wrote

@@ -46,7 +46,7 @@ without touching the others.
 | Grok, through its remote MCP support | yes | yes | yes, by webhook |
 | Claude app on phone and web | yes | yes | no, reads on request |
 | ChatGPT, through a Site it hosts | yes | yes | no, reads on request |
-| Codex | guide written, not yet tested; can run the dream | | not yet |
+| Codex CLI | yes | yes | no, reads at session start |
 
 ## Install
 
@@ -95,6 +95,10 @@ Or build it: `cargo install --git
 https://github.com/jksim26/lucid-dream`. Then
 [set up the machine that holds the memory](#set-up-the-pc-that-holds-the-memory)
 and [connect the agents](#connect-the-agents).
+
+**No Claude? Start here:**
+[set up with Grok, ChatGPT and Codex](docs/grok-chatgpt-codex.md), start to
+finish in one page.
 
 ## How it compares
 
@@ -159,7 +163,14 @@ for another agent. The [voice rules](docs/roadmap.md#voice-rules) build on this.
 
 ## Set up the PC that holds the memory
 
-[Install](#install) the binary, then create the store:
+[Install](#install) the binary. The short way creates the store, issues a
+token per agent and prints the commands for everything below:
+
+```bash
+lucid-dream quickstart <memory dir> --agents claude,grok,chatgpt,codex
+```
+
+Or step by step. Create the store:
 
 ```bash
 lucid-dream init <memory dir>

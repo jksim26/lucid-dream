@@ -38,13 +38,19 @@ const USAGE: &str = "\
 lucid-dream: one shared memory that every agent reads and dream tidies
 
 On the machine that holds the memory:
+  lucid-dream quickstart <dir> --agents grok,chatgpt,codex
+                                                create the store, issue a token per agent
+                                                and print the commands to run next
   lucid-dream init <dir>                        create a memory store (folders + git)
   lucid-dream token add <agent> [--label L] --root <dir>     issue a token (shown once)
   lucid-dream token remove <agent> [--label L] --root <dir>  revoke a token
   lucid-dream token list --root <dir>           list tokens as agent/label
   lucid-dream serve --root <dir> [--bind ADDR]  serve MCP over HTTP at /mcp
+  lucid-dream serve --root <dir> --doors grok=7882,chatgpt=7883
+                                                also open a door per cloud agent, each on its
+                                                own local port and accepting only that token
   lucid-dream serve --root <dir> --bind ADDR --only <agent>/<label>
-                                                a door: accepts that one token only
+                                                a door by itself: accepts that one token only
   lucid-dream serve --root <dir> --stdio [--as <agent>]
   lucid-dream dream --root <dir> [--dry-run]    consolidate the inbox and commit
   lucid-dream webhook set <agent> --url URL --root <dir>
@@ -113,6 +119,7 @@ fn main() -> ExitCode {
     }
     let result = match command.as_str() {
         "init" => cmd_init(raw),
+        "quickstart" => cmd_quickstart(raw),
         "token" => cmd_token(raw),
         "serve" => cmd_serve(raw),
         "dream" => cmd_dream(raw),
@@ -230,7 +237,11 @@ fn cmd_token(raw: Vec<String>) -> Result<(), String> {
 }
 
 fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root", "--bind", "--as", "--only"], &["--stdio"])?;
+    let args = Args::parse(
+        raw,
+        &["--root", "--bind", "--as", "--only", "--doors"],
+        &["--stdio"],
+    )?;
     let store = args.store()?;
     if args.switches.contains("--stdio") {
         let who = args
@@ -256,15 +267,128 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
             None => (only, tokens::DEFAULT_LABEL.to_string()),
         });
     let tokens = tokens::path(store.root());
-    http::serve(
+    let root = store.root().to_path_buf();
+    let mut listeners = vec![(
         addr,
         http::App {
             store,
-            tokens,
+            tokens: tokens.clone(),
             loopback: addr.ip().is_loopback(),
             only,
         },
-    )
+    )];
+    // `--doors grok=7882,chatgpt=7883`: a door per cloud client, in this same
+    // process, each on its own loopback port for a tunnel to point at.
+    for (agent, label, port) in doors(&args.option("--doors").unwrap_or_default())? {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        listeners.push((
+            addr,
+            http::App {
+                store: Store::open(&root).map_err(|e| e.to_string())?,
+                tokens: tokens.clone(),
+                loopback: true,
+                only: Some((agent, label)),
+            },
+        ));
+    }
+    http::serve_all(listeners)
+}
+
+/// Parse `agent[/label]=port,...` into (agent, label, port).
+fn doors(list: &str) -> Result<Vec<(String, String, u16)>, String> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|door| {
+            let bad = || format!("bad door `{door}`; write it as agent=port, e.g. grok=7882");
+            let (who, port) = door.split_once('=').ok_or_else(bad)?;
+            let port: u16 = port.trim().parse().map_err(|_| bad())?;
+            let (agent, label) = match who.trim().split_once('/') {
+                Some((agent, label)) => (agent, label),
+                None => (who.trim(), tokens::DEFAULT_LABEL),
+            };
+            if !util::valid_name(agent) || port == 0 {
+                return Err(bad());
+            }
+            Ok((agent.to_string(), label.to_string(), port))
+        })
+        .collect()
+}
+
+/// Ports the guides use for each cloud client's door, and the public port a
+/// Tailscale Funnel gives it. Any other agent connects to the main listener.
+const DOORS: [(&str, u16, u16); 2] = [("grok", 7882, 8443), ("chatgpt", 7883, 10000)];
+
+/// Everything the machine that holds the memory needs, in one step: the
+/// store, a token per agent, and the commands to run next.
+fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--agents"], &[])?;
+    let [dir] = args.words.as_slice() else {
+        return Err("usage: lucid-dream quickstart <dir> --agents grok,chatgpt,codex".into());
+    };
+    let agents: Vec<String> = args
+        .option("--agents")
+        .ok_or("name your agents, e.g. --agents grok,chatgpt,codex")?
+        .split(',')
+        .map(|a| a.trim().to_lowercase())
+        .filter(|a| !a.is_empty())
+        .collect();
+    if let Some(bad) = agents.iter().find(|a| !util::valid_name(a) || *a == "user") {
+        return Err(format!("bad agent name: {bad}"));
+    }
+    let root = PathBuf::from(dir);
+    let existed = root.join("MEMORY.md").exists();
+    init::run(&root)?;
+    println!(
+        "Memory store: {dir} ({})",
+        if existed { "already there" } else { "created" }
+    );
+
+    let file = tokens::path(&root);
+    let have = Tokens::load(&file).map_err(|e| e.to_string())?;
+    println!("\nTokens. Each is shown once; give it only to that agent:");
+    for agent in &agents {
+        if have.has(agent, tokens::DEFAULT_LABEL) {
+            println!(
+                "  {agent}: already has one (make another with `token add {agent} --label <name>`)"
+            );
+        } else {
+            let token = Tokens::add(&file, agent, tokens::DEFAULT_LABEL)?;
+            println!("  {agent}: {token}");
+        }
+    }
+
+    let doors: Vec<&(&str, u16, u16)> = DOORS
+        .iter()
+        .filter(|(agent, _, _)| agents.iter().any(|a| a == agent))
+        .collect();
+    let mut serve = format!("lucid-dream serve --root {dir}");
+    if !doors.is_empty() {
+        let list: Vec<String> = doors
+            .iter()
+            .map(|(a, port, _)| format!("{a}={port}"))
+            .collect();
+        serve.push_str(&format!(" --doors {}", list.join(",")));
+    }
+    println!("\nNext, start the server and leave it running:\n  {serve}");
+    if !doors.is_empty() {
+        println!(
+            "\nGrok and ChatGPT call from the internet, so each needs a public HTTPS address \
+             that leads only to its own door. With Tailscale installed:"
+        );
+        for (agent, port, public) in &doors {
+            println!("  tailscale funnel --bg --https={public} {port}     # {agent}");
+        }
+        println!(
+            "Their addresses are then https://<this-machine>.<tailnet>.ts.net:<port>/mcp, with \
+             the ports above."
+        );
+    }
+    println!(
+        "\nThen connect each agent: https://github.com/jksim26/lucid-dream#connect-the-agents\n\
+         Check everything with: lucid-dream doctor --root {dir}"
+    );
+    Ok(())
 }
 
 /// stdio transport: one JSON-RPC message per line.
@@ -593,5 +717,25 @@ fn hook(raw: Vec<String>) -> Result<(), String> {
             hooks::session_end(&client, &input)
         }
         _ => Err("usage: lucid-dream hook session-start | stop | wait | session-end".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_doors() {
+        assert_eq!(
+            doors("grok=7882, claude/phone=7881,").unwrap(),
+            [
+                ("grok".to_string(), "default".to_string(), 7882),
+                ("claude".to_string(), "phone".to_string(), 7881),
+            ]
+        );
+        assert!(doors("").unwrap().is_empty());
+        for bad in ["grok", "grok=abc", "grok=0", "=7882", "gr ok=7882"] {
+            assert!(doors(bad).is_err(), "{bad}");
+        }
     }
 }

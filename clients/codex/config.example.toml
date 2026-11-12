@@ -4,3 +4,6 @@
 [mcp_servers.lucid-dream]
 url = "http://<pc-name>:7878/mcp"
 bearer_token_env_var = "LUCID_TOKEN_CODEX"
+# Approve this server's tools in advance, so Codex does not ask before each
+# memory call. Remove the line if you would rather be asked.
+default_tools_approval_mode = "approve"

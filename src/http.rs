@@ -33,45 +33,61 @@ pub struct App {
     pub only: Option<(String, String)>,
 }
 
-pub fn serve(addr: SocketAddr, app: App) -> Result<(), String> {
-    let tokens = Tokens::load(&app.tokens).map_err(|e| format!("cannot read tokens: {e}"))?;
-    match &app.only {
-        Some((agent, label)) if !tokens.has(agent, label) => {
-            return Err(format!(
-                "no token {agent}/{label}; issue it with `lucid-dream token add {agent} --label {label}`"
-            ));
+/// Serve several listeners from one process: the main one and a door per
+/// cloud client, each with its own rules about which tokens it accepts.
+pub fn serve_all(listeners: Vec<(SocketAddr, App)>) -> Result<(), String> {
+    let mut routers = Vec::new();
+    for (addr, app) in listeners {
+        let tokens = Tokens::load(&app.tokens).map_err(|e| format!("cannot read tokens: {e}"))?;
+        match &app.only {
+            Some((agent, label)) if !tokens.has(agent, label) => {
+                return Err(format!(
+                    "no token {agent}/{label}; issue it with `lucid-dream token add {agent} --label {label}`"
+                ));
+            }
+            None if !app.loopback && tokens.is_empty() => {
+                return Err(format!(
+                    "refusing to listen on {addr} with no tokens; run `lucid-dream token add <agent>` \
+                     first, or bind to 127.0.0.1"
+                ));
+            }
+            _ => {}
         }
-        None if !app.loopback && tokens.is_empty() => {
-            return Err(format!(
-                "refusing to listen on {addr} with no tokens; run `lucid-dream token add <agent>` \
-                 first, or bind to 127.0.0.1"
-            ));
-        }
-        _ => {}
+        let scope = match &app.only {
+            Some((agent, label)) => format!(" (door for {agent}/{label} only)"),
+            None => String::new(),
+        };
+        eprintln!(
+            "lucid-dream: serving {} at http://{addr}/mcp{scope}",
+            app.store.root().display()
+        );
+        let router = Router::new()
+            .route("/mcp", post(post_mcp).get(get_mcp))
+            .route(
+                "/mcp/{token}",
+                post(post_mcp_with_path_token).get(get_mcp_with_path_token),
+            )
+            .route("/health", get(|| async { "ok" }))
+            .with_state(Arc::new(app));
+        routers.push((addr, router));
     }
-    let scope = match &app.only {
-        Some((agent, label)) => format!(" (door for {agent}/{label} only)"),
-        None => String::new(),
-    };
-    eprintln!(
-        "lucid-dream: serving {} at http://{addr}/mcp{scope}",
-        app.store.root().display()
-    );
-    let router = Router::new()
-        .route("/mcp", post(post_mcp).get(get_mcp))
-        .route(
-            "/mcp/{token}",
-            post(post_mcp_with_path_token).get(get_mcp_with_path_token),
-        )
-        .route("/health", get(|| async { "ok" }))
-        .with_state(Arc::new(app));
     tokio::runtime::Runtime::new()
         .map_err(|e| e.to_string())?
         .block_on(async {
-            let listener = tokio::net::TcpListener::bind(addr).await?;
-            axum::serve(listener, router).await
+            let mut running = tokio::task::JoinSet::new();
+            for (addr, router) in routers {
+                let listener = tokio::net::TcpListener::bind(addr)
+                    .await
+                    .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+                running.spawn(async move { axum::serve(listener, router).await });
+            }
+            // They run until the process is stopped; if one ends, stop them all.
+            match running.join_next().await {
+                Some(Ok(Err(e))) => Err(format!("http: {e}")),
+                Some(Err(e)) => Err(format!("http: {e}")),
+                _ => Ok(()),
+            }
         })
-        .map_err(|e: std::io::Error| format!("http: {e}"))
 }
 
 async fn post_mcp(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {

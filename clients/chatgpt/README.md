@@ -5,23 +5,47 @@ host its own small MCP server, and publishing the Site turns that server's tools
 into a personal plugin. The Site acts as a relay: ChatGPT calls the Site's
 tools, and the Site forwards each call to a lucid-dream door.
 
-Sites need ChatGPT Plus, Pro, Business or Enterprise. OpenAI's guides:
+OpenAI's guides:
 [Creating and using ChatGPT Sites](https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites)
 and [Hosting a plugin with ChatGPT Sites](https://help.openai.com/en/articles/20001547-hosting-a-plugin-with-chatgpt-sites).
 
-Tried on 2026-11-12 with a personal account: ChatGPT built the relay Site from
-the brief below and loaded the memory index through it.
+Tried on 2026-11-12 with a personal Plus account: ChatGPT built the relay
+Site from the brief below, and through it loaded the memory index, listed
+sessions with `who` and sent a message to one Claude session.
+
+## Why a Site, and its limits
+
+On our Plus account, ChatGPT could not add an outside MCP server directly;
+ChatGPT itself reports that OpenAI lists that for Business and
+Enterprise/Edu only. A Site-hosted plugin is the route that works on a
+personal plan, with these limits (from OpenAI's pages above, read on
+2026-11-12):
+
+- **Plans:** OpenAI lists Sites for Plus, Pro, Business and Enterprise. Free
+  is not on that list. This was tried on Plus only.
+- **Each person builds their own.** A Pro or personal account cannot share a
+  Site-hosted plugin by invitation or link, and only the Site's owner can
+  publish it. Another AI can write the relay's code, but it becomes your
+  plugin only when your own ChatGPT publishes it as a Site.
+- **Where to build:** on ChatGPT web or the desktop app.
+- **Quota:** building or editing the Site counts toward your Codex usage.
+  Running it is counted separately.
+- **No wake-up:** ChatGPT reads its messages when you ask it to.
+- **Updating the tools:** ask ChatGPT to change the Site, then publish it
+  again; the plugin picks up the new tools after publishing.
 
 ## 1. A door for ChatGPT (on the PC)
 
 ChatGPT gets its own name, token, door and tunnel, like the Claude app and Grok.
+`lucid-dream quickstart <memory dir> --agents chatgpt` does the first step
+and prints the rest; by hand it is:
 
 ```bash
 lucid-dream token add chatgpt --root <memory dir>
 ```
 
 ```bash
-lucid-dream serve --root <memory dir> --bind 127.0.0.1:7883 --only chatgpt
+lucid-dream serve --root <memory dir> --doors chatgpt=7883
 ```
 
 ```bash
@@ -81,8 +105,9 @@ Add a custom instruction so it does this at the start of a conversation, and so
 - The Site holds the `chatgpt` token. Revoking it on the PC
   (`lucid-dream token remove chatgpt`) cuts ChatGPT off without touching anyone
   else.
-- Building or editing the Site counts toward your Codex usage.
 - A personal account cannot share a Site-hosted plugin, which is what you want
-  here.
+  here: the plugin holds a token to your memory.
 - A Site can call an address on port 10000. Whether the plugin works in the
   phone app is not confirmed.
+- If no plugin card appears after publishing on the web, OpenAI's guide says
+  to finish the plugin setup in the ChatGPT desktop app.

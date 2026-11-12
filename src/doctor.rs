@@ -62,7 +62,17 @@ pub fn run(options: &Options) -> bool {
         checks.extend(store(root));
     }
     checks.push(heading("Claude Code on this machine"));
-    let settings = read_settings(options.settings, &mut checks);
+    let connected = options.settings.exists();
+    let settings = if connected {
+        read_settings(options.settings, &mut checks)
+    } else {
+        checks.push(check(
+            Level::Ok,
+            "not connected here (nothing to do unless you use Claude Code; then run \
+             `lucid-dream setup`)",
+        ));
+        None
+    };
     let from_settings = |key: &str| {
         settings
             .as_ref()
@@ -75,15 +85,23 @@ pub fn run(options: &Options) -> bool {
         .url
         .clone()
         .or_else(|| env("LUCID_URL"))
-        .or_else(|| from_settings("LUCID_URL"));
+        .or_else(|| from_settings("LUCID_URL"))
+        // On the machine that holds the memory, the server is normally here.
+        .or_else(|| {
+            options
+                .root
+                .map(|_| "http://127.0.0.1:7878/mcp".to_string())
+        });
     let token = env("LUCID_TOKEN").or_else(|| from_settings("LUCID_TOKEN"));
     if let Some(settings) = &settings {
         checks.extend(hooks(settings, &|exe| version_of(exe)));
     }
-    if !options.offline {
-        checks.push(mcp_registered());
+    if connected {
+        if !options.offline {
+            checks.push(mcp_registered());
+        }
+        checks.push(waiters());
     }
-    checks.push(waiters());
     checks.push(heading("Server"));
     checks.extend(server(url, token));
 
@@ -327,10 +345,22 @@ fn server(url: Option<String>, token: Option<String>) -> Vec<Check> {
         )];
     };
     let Some(token) = token else {
-        return vec![check(
-            Level::Fail,
-            format!("no token for {url}; set LUCID_TOKEN or run `lucid-dream setup`"),
-        )];
+        // No token on this machine to test with: at least see that it is up.
+        let health = match url.strip_suffix("/mcp") {
+            Some(base) => format!("{base}/health"),
+            None => url.clone(),
+        };
+        let agent = ureq::AgentBuilder::new().timeout(TIMEOUT).build();
+        return vec![match agent.get(&health).call() {
+            Ok(_) => check(
+                Level::Ok,
+                format!("{url} answers (no LUCID_TOKEN here, so no token was tested)"),
+            ),
+            Err(_) => check(
+                Level::Fail,
+                format!("nothing answers at {url}; start it with `lucid-dream serve`"),
+            ),
+        }];
     };
     match Client::with(url.clone(), token, TIMEOUT).call("who", serde_json::json!({})) {
         Ok(list) => {

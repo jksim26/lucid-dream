@@ -29,11 +29,13 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
 
 - [x] **14. Looking after an install** (added 2026-11-12): `doctor`, `upgrade` and
   `uninstall`; dream falls back to a second agent when the first fails
+- [x] **15. Without Claude** (added 2026-11-12): `quickstart`, one server with several
+  doors, Codex as a memory client, and a guide for Grok + ChatGPT + Codex users
 
 Not done yet:
 
 - [ ] Schedule the nightly dream (it has only been run by hand)
-- [ ] Connect Codex with its own token
+- [ ] Walk the Grok + ChatGPT + Codex guide from scratch on Windows and Linux
 - [ ] Try `install.ps1` and `setup` on Windows from scratch
 - [ ] Handoffs: a message with one owner, claimed exactly once
 - [ ] Indexed full-text search, once scanning files gets slow
