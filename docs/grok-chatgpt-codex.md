@@ -233,5 +233,11 @@ account, Codex as a memory client and as the dream agent on macOS.
 
 Not tried: Grok Bot or ChatGPT connecting themselves from a pasted block,
 this whole guide from scratch on Windows or Linux, the plugin in
-the ChatGPT phone app, and Grok Bot accepting an address on a port other
-than 8443.
+the ChatGPT phone app, Grok Bot accepting an address on a port other
+than 8443, and the dream on the model `--dream-with codex` now asks for
+first (`gpt-6.1-sol`; the same command without a model was tried, and is
+what it falls back to).
+
+If a step does not work as written, that is a fault in this guide: please
+[open an issue](https://github.com/jksim26/lucid-dream/issues) saying which
+step and what you saw.
