@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,9 +28,14 @@ for them. To answer, call the lucid-dream `send` tool with `to` set to the event
 `re` set to its `path`. When you have dealt with the messages, call the lucid-dream `messages` \
 tool to mark them read.";
 
+/// How long to wait before reconnecting to the server's event stream.
+const RECONNECT_AFTER: Duration = Duration::from_secs(5);
+
 type Out = Arc<Mutex<std::io::Stdout>>;
 
-pub fn run(client: Client, poll: Duration) -> std::io::Result<()> {
+/// `me` names this session (session, id, device, project, live) so the server
+/// lists it as listening and hands it the messages addressed to it alone.
+pub fn run(client: Client, poll: Duration, me: Value) -> std::io::Result<()> {
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
     let client = Arc::new(client);
     let mut polling = false;
@@ -38,14 +44,36 @@ pub fn run(client: Client, poll: Duration) -> std::io::Result<()> {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(reply) = answer(&msg) {
+        if let Some(mut reply) = answer(&msg) {
+            if msg["method"] == "initialize" {
+                // Check in before answering, so the session is told its name.
+                if let Ok(number) = client.call("check_in", me.clone()) {
+                    let told = format!(
+                        "{INSTRUCTIONS} This session is #{number} in the lucid-dream `who` \
+                         list and other agents reach it by that number; tell the user the \
+                         number if they ask which session this is."
+                    );
+                    reply["result"]["instructions"] = json!(told);
+                }
+            }
             write(&out, &reply)?;
         }
         // Claude Code is ready for events once it says it is initialized.
         if msg["method"] == "notifications/initialized" && !polling {
             polling = true;
-            let (out, client) = (out.clone(), client.clone());
-            std::thread::spawn(move || watch(&client, &out, poll));
+            let (out, client, me) = (out.clone(), client.clone(), me.clone());
+            // The server says when a message is sent; the regular check is
+            // the fallback, and keeps this session listed as listening.
+            let (sent, wake) = std::sync::mpsc::channel();
+            let listener = client.clone();
+            std::thread::spawn(move || loop {
+                let sent = sent.clone();
+                let _ = listener.listen(move || {
+                    let _ = sent.send(());
+                });
+                std::thread::sleep(RECONNECT_AFTER);
+            });
+            std::thread::spawn(move || watch(&client, &out, poll, &me, &wake));
         }
     }
     Ok(())
@@ -88,14 +116,21 @@ fn write(out: &Out, value: &Value) -> std::io::Result<()> {
     out.flush()
 }
 
-/// Poll for unread messages and push the ones not pushed before.
-fn watch(client: &Client, out: &Out, poll: Duration) {
+/// Fetch unread messages, at once when woken and otherwise every `poll`, and
+/// push the ones not pushed before.
+fn watch(client: &Client, out: &Out, poll: Duration, me: &Value, wake: &Receiver<()>) {
     let mut seen = HashSet::new();
     // Messages already waiting when the session began were shown by the
     // SessionStart hook; only what arrives afterwards is pushed.
     let mut primed = false;
     loop {
-        if let Ok(text) = client.call("messages", json!({ "peek": true, "json": true })) {
+        // Each round is also this session's check-in: it stays listed as
+        // listening, and learns the name its messages are addressed to.
+        let mut ask = json!({ "peek": true, "json": true });
+        if let Ok(name) = client.call("check_in", me.clone()) {
+            ask["session"] = json!(name);
+        }
+        if let Ok(text) = client.call("messages", ask) {
             let unread: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             for event in fresh(&unread, &mut seen, primed) {
                 if write(out, &event).is_err() {
@@ -104,7 +139,9 @@ fn watch(client: &Client, out: &Out, poll: Duration) {
             }
             primed = true;
         }
-        std::thread::sleep(poll);
+        // Until the server says something was sent, or the next regular check.
+        let _ = wake.recv_timeout(poll);
+        while wake.try_recv().is_ok() {}
     }
 }
 

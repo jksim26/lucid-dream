@@ -40,7 +40,7 @@ this repo**: this repo is public, and the store holds your notes.
 | `archive/` | Processed and replaced notes; nothing is hard-deleted | Dream |
 | `MEMORY.md` | The index loaded at session start (under 200 lines) | Dream |
 | `open-questions.md` | Your own conflicting decisions, awaiting your call | Dream |
-| `.lucid/` | Token hashes and who has seen which message; ignored by git | `token add`, server |
+| `.lucid/` | Token hashes, who has seen which message, session check-ins; ignored by git | `token add`, server |
 
 Every note records two things: `source`, the agent that wrote it down, and
 `said_by`, whose statement it is. `said_by: user` is your own decision; anything
@@ -86,7 +86,7 @@ over stdio instead.
 - Grok: [clients/grok](clients/grok)
 - ChatGPT, through a Site it hosts: [clients/chatgpt](clients/chatgpt)
 
-The server offers eight tools:
+The server offers ten tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -94,7 +94,9 @@ The server offers eight tools:
 | `list`, `read`, `search` | Browse and search the store |
 | `remember` | Adds a note to `inbox/` for dream to merge |
 | `log` | Records a session summary in `logs/` |
-| `send` | Leaves a message for another agent, or for `all` |
+| `send` | Leaves a message for another agent, or for `all`; `session` narrows it to one session by number |
+| `check_in` | Announces a session and returns its number |
+| `who` | Lists the agents and their sessions, and which are listening now |
 | `messages` | Returns messages the caller has not seen yet |
 
 Reads refuse absolute paths, `..`, hidden files and symlinks that leave the
@@ -120,7 +122,10 @@ sends a test nudge; `webhook list` and `webhook remove grok` manage it. The
 address and its secret are stored in `.lucid/webhooks.json`, outside git.
 
 **Channel, for a Claude Code session that is open** (research preview). The
-`lucid-dream channel` helper pushes new messages into a running session; see
+`lucid-dream channel` helper stays connected to the server, which tells it the
+moment a message is sent; the helper fetches it and pushes it into the running
+session, in well under a second. It also checks every 20 seconds in case the
+connection dropped. See
 [clients/claude-code](clients/claude-code#live-messages-channel).
 
 Session logs are scrubbed of anything that looks like a credential before they
@@ -167,6 +172,32 @@ waits in `messages/` until its recipient asks for it; each agent is given a
 message once. Claude Code gets its messages from the SessionStart hook; Codex
 and Grok call `messages` themselves. Once tokens exist, a message can only be
 addressed to an agent that has one.
+
+### Choosing a session
+
+An agent can have several sessions open. Each one announces itself when it
+starts or listens, and the server gives it a number. The number is unique
+across all agents, stays with the session while it keeps checking in, and is
+how the session is addressed. `who` lists them, and so does `lucid-dream who`
+in a terminal:
+
+```
+claude: reads messages when it next looks
+  #1 "Agent memory repo" on mac (~/code/lucid-dream): listening now
+  #2 on mac (~/code/lucid-dream): listening now
+  #4 "Stops review" on sim (X:\code\trading): not listening, last seen 12 min ago
+grok: woken by webhook
+```
+
+`send` with `session: "2"` reaches that session only; without it, every
+session of that agent gets the message. A message reaches a listening session within a second. A session counts as listening while its
+[channel helper](clients/claude-code#live-messages-channel) has checked in
+within the last 90 seconds. A session unseen for a day drops off the list and
+its number goes to the next new session.
+
+Each Claude Code session is told its number at start and asked to keep it at
+the front of its title, so in the app you see `#1 Agent memory repo`. The text
+after the number is what `who` shows as the session's topic.
 
 Messages are handed over labelled as a colleague's notes, not as instructions
 from you. They are not memory either: dream reads them as evidence, like logs,
@@ -226,10 +257,10 @@ the server.
 | `LUCID_DREAM_CMD` | dream | Agent command; the prompt is appended |
 | `LUCID_DEBUG` | hooks | Print why a hook did nothing |
 | `LUCID_WEBHOOK_AUTH` | webhook set | The webhook's `Authorization` value |
-| `LUCID_CHANNEL_POLL` | channel | Seconds between checks (default 20) |
+| `LUCID_CHANNEL_POLL` | channel | Seconds between fallback checks (default 20) |
 
 ## Status
 
-All eight roadmap steps are built; see [docs/roadmap.md](docs/roadmap.md) for
+All roadmap steps are built; see [docs/roadmap.md](docs/roadmap.md) for
 what is left to deploy and [docs/references.md](docs/references.md) for the
 projects this borrows from.

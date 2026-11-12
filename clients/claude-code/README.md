@@ -46,8 +46,12 @@ work in the terminal, and need a flag at every start.
    Accept the warning and the prompt to use the new server. The helper uses the
    `LUCID_URL` and `LUCID_TOKEN` already in your settings.
 
-Keep one listening session per agent. Every open session with the channel gets
-each new message, so two of them would both answer. Messages stay unread on the
+Each session gets a number automatically, and is asked to keep it at the front
+of its title, like `#3 Login bug`. Run `lucid-dream who` to see them all, or
+ask a session which number it is. Other agents see the numbers with the `who`
+tool and reach one session by adding `session` to `send`. In a terminal session
+Claude cannot set the title itself; use `/rename #3 Login bug` if you want it. A message sent without a
+session goes to every listening session, so each of them would answer it. Messages stay unread on the
 server until Claude marks them read, so nothing is lost if the session is
 closed; the next session start shows them as usual.
 

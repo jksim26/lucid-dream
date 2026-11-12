@@ -17,7 +17,60 @@ const MAX_PROMPTS: usize = 20;
 const MAX_PROMPT_CHARS: usize = 500;
 const MAX_REPLY_CHARS: usize = 1500;
 
-pub fn session_start(client: &Client) -> Result<(), String> {
+/// The name of the folder a session works in. It tells sessions apart only
+/// where the client gives them no id.
+pub fn session_name(cwd: Option<&str>) -> String {
+    let dir = cwd
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+    let folder = dir.and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()));
+    crate::util::label(&folder.unwrap_or_default())
+}
+
+/// `input` is the JSON Claude Code passes a SessionStart hook on stdin, or
+/// empty when the hook is run by hand.
+/// What a hook tells the server about its session. The title is the one the
+/// app shows for the session; Claude Code records it in the transcript.
+fn who_i_am(input: &Value) -> Value {
+    let cwd = input["cwd"].as_str();
+    let title = input["transcript_path"]
+        .as_str()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|jsonl| title_in(&jsonl))
+        .unwrap_or_default();
+    json!({
+        "session": session_name(cwd), "id": input["session_id"].as_str().unwrap_or(""),
+        "title": title, "device": hostname(), "project": cwd.unwrap_or(""), "live": false,
+    })
+}
+
+/// The latest title in a transcript, if the session has been given one.
+fn title_in(jsonl: &str) -> Option<String> {
+    jsonl
+        .lines()
+        .rev()
+        .filter(|line| line.contains("\"custom-title\""))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry["type"] == "custom-title")
+        .and_then(|entry| entry["customTitle"].as_str().map(without_number))
+        .filter(|title| !title.is_empty())
+}
+
+/// A title as the topic alone: "#3 Login bug" is about "Login bug".
+fn without_number(title: &str) -> String {
+    let title = title.trim();
+    let rest = title
+        .strip_prefix('#')
+        .map(|rest| rest.trim_start_matches(|c: char| c.is_ascii_digit()))
+        .filter(|rest| rest.len() < title.len() - 1);
+    rest.unwrap_or(title)
+        .trim_start_matches([' ', '-', ':', '\u{b7}'])
+        .trim()
+        .to_string()
+}
+
+pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
+    let input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
     let index = client.call("index", json!({}))?;
     println!(
         "# Shared memory (lucid-dream)\n\n{}\n\nThis index comes from the lucid-dream MCP \
@@ -28,7 +81,22 @@ pub fn session_start(client: &Client) -> Result<(), String> {
     // Messages other agents left for this one. Many sessions share one agent
     // name, so this only peeks: the message stays unread until a session that
     // has actually handled it calls `messages`.
-    if let Ok(messages) = client.call("messages", json!({ "peek": true })) {
+    // Announce this session; the server answers with the name it is listed
+    // under. An older server has no `check_in`, and the session goes unnamed.
+    let me = who_i_am(&input);
+    let mut ask = json!({ "peek": true });
+    if let Ok(number) = client.call("check_in", me) {
+        println!(
+            "\nThis session is #{number} in the lucid-dream `who` list; other agents reach it \
+             by that number. So the user can tell their sessions apart, keep \"#{number} \" at \
+             the start of this session's title, followed by its topic (for example \
+             \"#{number} Login bug\"): if you have a tool that sets this session's own title, \
+             set it once the topic is clear and again if the number goes missing; if you have \
+             none, do nothing. Tell the user the number if they ask which session this is."
+        );
+        ask["session"] = json!(number);
+    }
+    if let Ok(messages) = client.call("messages", ask) {
         if messages != "no new messages" {
             println!(
                 "\n# Unread messages from your other agents\n\n{}\n\nTell the user about these \
@@ -49,6 +117,13 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
         .as_str()
         .and_then(|path| fs::read_to_string(path).ok())
         .unwrap_or_default();
+    // A session gets its title after it starts, so each turn reports it.
+    if input["session_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty())
+    {
+        let _ = client.call("check_in", who_i_am(&input));
+    }
     let (prompts, transcript_reply) = read_transcript(&transcript);
     if prompts.is_empty() {
         return Ok(());
@@ -139,7 +214,7 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
-fn hostname() -> String {
+pub fn hostname() -> String {
     Command::new("hostname")
         .output()
         .ok()
@@ -160,6 +235,22 @@ not json
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"Use Rust for it"}]}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: fixed in auth.rs."}]}}
 "#;
+
+    #[test]
+    fn the_latest_title_in_a_transcript_is_the_sessions() {
+        let jsonl = r#"{"type":"custom-title","customTitle":"First guess","sessionId":"s"}
+{"type":"user","message":{"role":"user","content":"I said \"custom-title\" myself"}}
+{"type":"custom-title","customTitle":"Agent memory repo","sessionId":"s"}
+"#;
+        assert_eq!(title_in(jsonl).as_deref(), Some("Agent memory repo"));
+        assert_eq!(title_in(TRANSCRIPT), None);
+        assert_eq!(without_number("#12 Login bug"), "Login bug");
+        assert_eq!(
+            without_number("#3 - Agent memory repo"),
+            "Agent memory repo"
+        );
+        assert_eq!(without_number("#hashtag stays"), "#hashtag stays");
+    }
 
     #[test]
     fn keeps_only_what_the_user_typed_and_the_last_reply() {

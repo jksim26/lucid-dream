@@ -10,7 +10,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
-use crate::util::{sha256_hex, valid_name, Utc};
+use crate::util::{label, sha256_hex, valid_name, Utc};
 
 /// The index every agent loads at session start.
 pub const INDEX: &str = "MEMORY.md";
@@ -374,8 +374,33 @@ pub struct Message {
     pub to: String,
     pub at: String,
     pub re: Option<String>,
+    /// Set when the message is for one session of the recipient, not all of them.
+    pub session: Option<String>,
     pub text: String,
 }
+
+/// A session that has announced itself: which agent, what it calls itself,
+/// where it runs, and whether it is listening for messages right now.
+pub struct Presence {
+    pub agent: String,
+    /// What tells one session from another, such as Claude Code's session id.
+    /// Empty when the client has none; such a session is told apart by its
+    /// name and device alone.
+    pub id: String,
+    /// When listed: the session's number, which is its address. At check-in
+    /// it only matters for a session with no `id`, as the folder it is in.
+    pub session: String,
+    /// What the session is about, for people reading the list.
+    pub title: String,
+    pub device: String,
+    pub project: String,
+    pub live: bool,
+    pub at: i64,
+}
+
+/// A session counts as listening if it checked in this recently.
+pub const LISTENING_SECS: i64 = 90;
+const PRESENCE_KEPT_SECS: i64 = 24 * 3600;
 
 fn parse_message(path: String, body: &str) -> Option<Message> {
     let (head, text) = body.strip_prefix("---\n")?.split_once("\n---\n")?;
@@ -390,6 +415,7 @@ fn parse_message(path: String, body: &str) -> Option<Message> {
         to: get("to")?,
         at: get("at").unwrap_or_default(),
         re: get("re"),
+        session: get("session"),
         text: text.trim().to_string(),
     })
 }
@@ -397,10 +423,24 @@ fn parse_message(path: String, body: &str) -> Option<Message> {
 /// The bridge: agents leave each other messages that wait in `messages/`
 /// until the recipient's next session picks them up.
 impl Store {
+    #[cfg(test)]
     pub fn send(
         &self,
         from: &str,
         to: &str,
+        text: &str,
+        re: Option<&str>,
+        now: &Utc,
+    ) -> Result<String, StoreError> {
+        self.send_to(from, to, None, text, re, now)
+    }
+
+    /// Like `send`, optionally for one named session of the recipient.
+    pub fn send_to(
+        &self,
+        from: &str,
+        to: &str,
+        session: Option<&str>,
         text: &str,
         re: Option<&str>,
         now: &Utc,
@@ -418,10 +458,21 @@ impl Store {
         if let Some(re) = re.map(field).filter(|v| !v.is_empty()) {
             body.push_str(&format!("re: {re}\n"));
         }
+        if let Some(session) = session.map(label).filter(|v| !v.is_empty()) {
+            body.push_str(&format!("session: {session}\n"));
+        }
         body.push_str(&format!("---\n\n{text}\n"));
         let rel = format!("messages/{}/{}-{from}-{hash}.md", now.date(), now.compact());
         self.create(&rel, &body, true)?;
+        // Every listener, in this process or in a door's, watches this file
+        // to learn at once that there is something to fetch.
+        let _ = fs::write(self.sent_marker(), &rel);
         Ok(rel)
+    }
+
+    /// The file that changes whenever a message is sent.
+    pub fn sent_marker(&self) -> PathBuf {
+        self.root.join(".lucid").join("sent")
     }
 
     /// Messages addressed to `who` or to everyone, oldest first. By default
@@ -430,9 +481,23 @@ impl Store {
     /// An agent runs many sessions under one name, so a session-start hook
     /// only peeks: a message keeps being shown until a session that actually
     /// read it asks for it with `mark_seen`.
+    #[cfg(test)]
     pub fn messages(
         &self,
         who: &str,
+        include_seen: bool,
+        mark_seen: bool,
+    ) -> Result<Vec<Message>, StoreError> {
+        self.messages_for(who, None, include_seen, mark_seen)
+    }
+
+    /// Like `messages`, for one session. A message sent to a named session is
+    /// returned only to that session; a caller with no session name sees such
+    /// messages only when it asks for everything (`include_seen`).
+    pub fn messages_for(
+        &self,
+        who: &str,
+        session: Option<&str>,
         include_seen: bool,
         mark_seen: bool,
     ) -> Result<Vec<Message>, StoreError> {
@@ -461,7 +526,13 @@ impl Store {
             else {
                 continue;
             };
-            if message.from != who && (message.to == who || message.to == EVERYONE) {
+            let addressed = message.from != who && (message.to == who || message.to == EVERYONE);
+            let for_this_session = match (&message.session, session) {
+                (None, _) => true,
+                (Some(wanted), Some(mine)) => wanted == mine,
+                (Some(_), None) => include_seen,
+            };
+            if addressed && for_this_session {
                 found.push((message, was_seen));
             }
         }
@@ -488,6 +559,119 @@ impl Store {
                 .write_all(newly_seen.as_bytes())?;
         }
         Ok(kept.into_iter().map(|(m, _)| m).collect())
+    }
+}
+
+/// Presence: sessions announce themselves so other agents can see who is
+/// around and address one of them. Kept in `.lucid/presence/`, outside git.
+impl Store {
+    /// Records that a session is around and returns its number, which is how
+    /// it is addressed. A session keeps its number while it keeps checking
+    /// in; a new one takes the lowest number no recent session holds, across
+    /// all agents, so the numbers stay small and each means one session.
+    pub fn check_in(&self, presence: &Presence) -> Result<String, StoreError> {
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
+        check_name("agent", &presence.agent)?;
+        let (id, device) = (label(&presence.id), label(&presence.device));
+        // Without an id, a session is told apart by its folder and device.
+        let file = if id.is_empty() {
+            format!("{}--{device}.json", label(&presence.session))
+        } else {
+            format!("id-{id}.json")
+        };
+        let root = self.root.join(".lucid").join("presence");
+        let dir = root.join(&presence.agent);
+        fs::create_dir_all(&dir)?;
+        let mine = dir.join(file);
+
+        let read = |path: &Path| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        };
+        let before = read(&mine).unwrap_or_default();
+        let mut taken = Vec::new();
+        for agent_dir in fs::read_dir(&root)?.flatten() {
+            for other in fs::read_dir(agent_dir.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                if other.path() == mine {
+                    continue;
+                }
+                let Some(entry) = read(&other.path()) else {
+                    continue;
+                };
+                if presence.at - entry["at"].as_i64().unwrap_or(0) <= PRESENCE_KEPT_SECS {
+                    taken.extend(entry["number"].as_u64());
+                }
+            }
+        }
+        let number = before["number"]
+            .as_u64()
+            .filter(|n| *n > 0 && !taken.contains(n))
+            .or_else(|| (1..).find(|n| !taken.contains(n)))
+            .unwrap_or(1);
+        // What the session is about, for whoever reads the list. A check-in
+        // that has no title (the channel helper's) keeps the one given before.
+        let title = match field(&presence.title) {
+            new if !new.is_empty() => new,
+            _ => before["title"].as_str().unwrap_or("").to_string(),
+        };
+        // A hook checking in for a session whose helper is listening does not
+        // mark it as gone quiet.
+        let live = presence.live
+            || (before["live"] == true
+                && presence.at - before["at"].as_i64().unwrap_or(0) <= LISTENING_SECS);
+        let entry = serde_json::json!({
+            "number": number, "title": title, "device": device,
+            "project": field(&presence.project), "live": live, "at": presence.at,
+        });
+        fs::write(mine, entry.to_string())?;
+        Ok(number.to_string())
+    }
+
+    /// Sessions seen in the last day, listening ones first, then most recent.
+    pub fn who(&self, now: i64) -> Vec<Presence> {
+        let mut found = Vec::new();
+        let root = self.root.join(".lucid").join("presence");
+        for agent_dir in fs::read_dir(root).into_iter().flatten().flatten() {
+            let agent = agent_dir.file_name().to_string_lossy().into_owned();
+            for file in fs::read_dir(agent_dir.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let Some(entry) = fs::read_to_string(file.path())
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                else {
+                    continue;
+                };
+                let text = |key: &str| entry[key].as_str().unwrap_or("").to_string();
+                let at = entry["at"].as_i64().unwrap_or(0);
+                if now - at > PRESENCE_KEPT_SECS {
+                    continue;
+                }
+                found.push(Presence {
+                    agent: agent.clone(),
+                    id: String::new(),
+                    session: entry["number"].as_u64().unwrap_or(0).to_string(),
+                    title: text("title"),
+                    device: text("device"),
+                    project: text("project"),
+                    // A listener that stopped checking in is no longer listening.
+                    live: entry["live"] == true && now - at <= LISTENING_SECS,
+                    at,
+                });
+            }
+        }
+        let number = |p: &Presence| p.session.parse::<u64>().unwrap_or(0);
+        found.sort_by_key(|p| (p.agent.clone(), number(p)));
+        found
     }
 }
 
@@ -556,6 +740,115 @@ mod message_tests {
         // One of them reads it for real; later sessions are not shown it again.
         assert_eq!(s.messages("claude", false, true).unwrap().len(), 1);
         assert!(s.messages("claude", false, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_message_for_one_session_reaches_only_that_session() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::from_unix(1_700_000_000);
+        s.send_to(
+            "grok",
+            "claude",
+            Some("Trade"),
+            "Check the stop loss.",
+            None,
+            &now,
+        )
+        .unwrap();
+        s.send(
+            "grok",
+            "claude",
+            "For any Claude.",
+            None,
+            &Utc::from_unix(1_700_000_010),
+        )
+        .unwrap();
+
+        let texts = |session: Option<&str>, all: bool| -> Vec<String> {
+            s.messages_for("claude", session, all, false)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.text)
+                .collect()
+        };
+        assert_eq!(
+            texts(Some("trade"), false),
+            ["Check the stop loss.", "For any Claude."]
+        );
+        assert_eq!(texts(Some("dev"), false), ["For any Claude."]);
+        assert_eq!(texts(None, false), ["For any Claude."]);
+        // Asking for everything, without a session name, shows targeted ones too.
+        assert_eq!(texts(None, true).len(), 2);
+        assert_eq!(
+            s.messages_for("claude", Some("trade"), false, false)
+                .unwrap()[0]
+                .session
+                .as_deref(),
+            Some("trade")
+        );
+    }
+
+    #[test]
+    fn sessions_are_numbered_and_stop_counting_as_listening() {
+        let t = Temp::new();
+        let s = t.store();
+        let p = |agent: &str, id: &str, live: bool, at: i64| Presence {
+            agent: agent.into(),
+            id: id.into(),
+            session: "lucid-dream".into(),
+            title: String::new(),
+            device: "Mac Neo".into(),
+            project: "/Users/x/lucid-dream".into(),
+            live,
+            at,
+        };
+        // Two sessions in one folder, and one of another agent: a number each.
+        assert_eq!(s.check_in(&p("claude", "a", true, 1000)).unwrap(), "1");
+        assert_eq!(s.check_in(&p("claude", "b", false, 1001)).unwrap(), "2");
+        assert_eq!(s.check_in(&p("codex", "c", false, 1002)).unwrap(), "3");
+        // Each keeps its number as it checks in again, whatever the order.
+        assert_eq!(s.check_in(&p("claude", "b", false, 1003)).unwrap(), "2");
+        assert_eq!(s.check_in(&p("claude", "a", true, 1004)).unwrap(), "1");
+
+        let seen: Vec<(String, String, bool)> = s
+            .who(1010)
+            .into_iter()
+            .map(|p| (p.agent, p.session, p.live))
+            .collect();
+        let row = |agent: &str, n: &str, live| (agent.to_string(), n.to_string(), live);
+        assert_eq!(
+            seen,
+            [
+                row("claude", "1", true),
+                row("claude", "2", false),
+                row("codex", "3", false)
+            ]
+        );
+        // With no further check-in, the listener has gone quiet.
+        assert!(s.who(1004 + LISTENING_SECS + 1).iter().all(|p| !p.live));
+
+        // A title is kept when a later check-in has none, and a hook's
+        // check-in does not make a listening session look quiet.
+        let titled = Presence {
+            title: "Agent memory repo".into(),
+            live: false,
+            ..p("claude", "a", false, 1020)
+        };
+        s.check_in(&titled).unwrap();
+        s.check_in(&p("claude", "a", true, 1030)).unwrap();
+        let first = &s.who(1031)[0];
+        assert_eq!(
+            (first.title.as_str(), first.live),
+            ("Agent memory repo", true)
+        );
+
+        // A day after a session was last seen, it is off the list and its
+        // number goes to the next new session.
+        let later = 1003 + PRESENCE_KEPT_SECS + 10;
+        s.check_in(&p("claude", "a", true, later)).unwrap();
+        assert_eq!(s.who(later).len(), 1);
+        assert_eq!(s.check_in(&p("claude", "d", true, later)).unwrap(), "2");
     }
 
     #[test]

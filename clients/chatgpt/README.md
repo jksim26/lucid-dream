@@ -57,8 +57,10 @@ On ChatGPT web or desktop, paste this, filling in the address:
 > - `search` (`query`, string; `limit`, optional integer): searches memory.
 > - `remember` (`text`, string; `said_by`, optional, only ever "user"; `topic`,
 >   optional string): saves a note.
-> - `send` (`to`, string: claude, grok, codex or all; `text`, string): leaves a
->   message for another agent.
+> - `send` (`to`, string: claude, grok, codex or all; `text`, string; `session`,
+>   optional string, a session number from `who`): leaves a message for another
+>   agent, or for one of its sessions.
+> - `who` (no arguments): lists the agents and their sessions.
 > - `messages` (no arguments): returns unread messages from other agents.
 >
 > The status page should call `GET https://<pc-name>.<tailnet>.ts.net:10000/health`

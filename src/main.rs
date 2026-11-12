@@ -54,6 +54,7 @@ On any device:
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
   lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)
+  lucid-dream who [--root <dir> | --url URL]    List the agents and their sessions
   lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
                                                 into a running session (research preview)
 
@@ -95,6 +96,7 @@ fn main() -> ExitCode {
         "import" => cmd_import(raw),
         "webhook" => cmd_webhook(raw),
         "channel" => cmd_channel(raw),
+        "who" => cmd_who(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
     match result {
@@ -305,7 +307,32 @@ fn cmd_channel(raw: Vec<String>) -> Result<(), String> {
     let seconds = env("LUCID_CHANNEL_POLL")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(20);
-    channel::run(client, Duration::from_secs(seconds.max(2))).map_err(|e| format!("channel: {e}"))
+    let project = std::env::current_dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    // Claude Code tells its helpers which session they belong to; the same id
+    // reaches the SessionStart hook, so both check in as one session.
+    let id = env("CLAUDE_CODE_SESSION_ID")
+        .unwrap_or_else(|| format!("{}-{}", std::process::id(), util::unix_now()));
+    let me = serde_json::json!({
+        "session": hooks::session_name(None), "id": id, "device": hooks::hostname(),
+        "project": project, "live": true,
+    });
+    channel::run(client, Duration::from_secs(seconds.max(2)), me)
+        .map_err(|e| format!("channel: {e}"))
+}
+
+/// The session list, for the user: from the store on the PC that holds it,
+/// from the server anywhere else.
+fn cmd_who(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root", "--url"], &[])?;
+    let list = if args.option("--root").is_some() || env("LUCID_ROOT").is_some() {
+        mcp::who_is_around(&args.store()?, "")
+    } else {
+        Client::from_env(args.option("--url"), HOOK_TIMEOUT)?.call("who", serde_json::json!({}))?
+    };
+    println!("{}", list.trim_end());
+    Ok(())
 }
 
 fn cmd_webhook(raw: Vec<String>) -> Result<(), String> {
@@ -367,7 +394,14 @@ fn hook(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(raw, &["--url"], &[])?;
     let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
     match args.words.first().map(String::as_str) {
-        Some("session-start") => hooks::session_start(&client),
+        Some("session-start") => {
+            // Claude Code passes details on stdin; a person running this by hand passes nothing.
+            let mut input = String::new();
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                let _ = std::io::stdin().read_to_string(&mut input);
+            }
+            hooks::session_start(&client, &input)
+        }
         Some("stop") => {
             let mut input = String::new();
             std::io::stdin()

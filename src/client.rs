@@ -63,4 +63,27 @@ impl Client {
             Ok(text)
         }
     }
+
+    /// Stay connected to the server's event stream and call `on_sent` each
+    /// time it says a message was sent. Returns when the connection ends.
+    pub fn listen(&self, mut on_sent: impl FnMut()) -> Result<(), String> {
+        use std::io::BufRead;
+        // The server sends a keep-alive every 15 seconds; a minute of silence
+        // means the connection is dead.
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(self.timeout)
+            .timeout_read(Duration::from_secs(60))
+            .build();
+        let mut request = agent.get(&self.url).set("Accept", "text/event-stream");
+        if let Some(token) = &self.token {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        let response = request.call().map_err(|e| e.to_string())?;
+        for line in std::io::BufReader::new(response.into_reader()).lines() {
+            if line.map_err(|e| e.to_string())?.trim() == "event: message" {
+                on_sent();
+            }
+        }
+        Ok(())
+    }
 }

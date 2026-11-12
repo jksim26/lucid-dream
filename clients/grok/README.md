@@ -64,8 +64,8 @@ carries no message text; Grok reads the message through its door.
 Whether the Grok apps (as opposed to the API) can use a remote MCP server, and
 whether xAI accepts a URL on port 8443, are not confirmed.
 
-With direct MCP, Grok can also use `send` and `messages` to talk to the other
-agents; with the digest route it cannot, so relay through another agent.
+With direct MCP, Grok can also use `send`, `messages` and `who` to talk to the other
+agents, or to one session of an agent; with the digest route it cannot, so relay through another agent.
 
 Either way the voice rule holds: Grok's own opinions stay in `notes/` and
 `wiki/`, attributed, and never enter `MEMORY.md` until you confirm them.

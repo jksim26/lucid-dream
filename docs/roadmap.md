@@ -23,6 +23,8 @@ the server on the Windows PC and pointing each agent at it (see the README).
   Claude Code channel helper that pushes messages into an open session
 - [x] **11. ChatGPT** (added 2026-11-12): joins through a relay Site that ChatGPT hosts,
   with its own token, door and tunnel ([clients/chatgpt](../clients/chatgpt))
+- [x] **12. Sessions** (added 2026-11-12): sessions announce themselves and get a
+  number, `who` lists them, and `send` can address one by number
 
 Not done anywhere yet:
 

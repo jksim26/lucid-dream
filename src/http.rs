@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -91,10 +92,11 @@ async fn post_mcp_with_path_token(
     respond(&app, &headers, Some(&token), &body)
 }
 
-/// GET opens the stream a server may use to push messages. This server never
-/// pushes, but some clients probe with GET first and give up on a 405, so an
-/// admitted caller gets an idle stream and anyone else gets a 401 that tells
-/// the client a token is needed.
+/// GET opens a stream that says "a message was sent" each time one is, so a
+/// listener can fetch it at once instead of waiting for its next check. It
+/// never says what was sent or to whom; the listener asks with `messages`.
+/// Some clients only probe with GET and give up on a 405; they get the same
+/// stream, and anyone without a token gets a 401.
 async fn get_mcp(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     listen(&app, &headers, None)
 }
@@ -116,10 +118,30 @@ fn listen(app: &App, headers: &HeaderMap, path_token: Option<&str>) -> Response 
         Caller::Local if !origin_allowed(headers) => {
             (StatusCode::FORBIDDEN, "origin not allowed").into_response()
         }
-        _ => Sse::new(futures_util::stream::pending::<Result<Event, Infallible>>())
+        _ => Sse::new(sent_events(app.store.sent_marker()))
             .keep_alive(KeepAlive::default())
             .into_response(),
     }
+}
+
+/// How often a stream looks at the marker file. A file rather than a signal
+/// inside the process, because the sender may be on another door, which is
+/// another process.
+const WATCH_EVERY: Duration = Duration::from_millis(300);
+
+fn sent_events(marker: PathBuf) -> impl futures_util::Stream<Item = Result<Event, Infallible>> {
+    let read = |marker: &PathBuf| std::fs::read_to_string(marker).unwrap_or_default();
+    let last = read(&marker);
+    futures_util::stream::unfold((marker, last), move |(marker, last)| async move {
+        loop {
+            tokio::time::sleep(WATCH_EVERY).await;
+            let now = read(&marker);
+            if now != last {
+                let event = Event::default().event("message").data("sent");
+                return Some((Ok(event), (marker, now)));
+            }
+        }
+    })
 }
 
 fn unauthorized() -> Response {

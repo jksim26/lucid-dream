@@ -73,6 +73,28 @@ impl Utc {
     }
 }
 
+pub fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// A session or device name made safe for a file name and easy to type:
+/// lowercase letters, digits and single dashes, at most 32 characters.
+pub fn label(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.truncate(32);
+    out.trim_end_matches('-').to_string()
+}
+
 pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::digest(data)
         .iter()
@@ -193,6 +215,15 @@ mod tests {
             redact("commit 0fa71d6 and run 42979147512"),
             "commit 0fa71d6 and run 42979147512"
         );
+    }
+
+    #[test]
+    fn labels_are_tidy() {
+        assert_eq!(label("Claude Trading"), "claude-trading");
+        assert_eq!(label("  jks-MacBook_Neo.local "), "jks-macbook-neo-local");
+        assert_eq!(label("../../x"), "x");
+        assert_eq!(label("***"), "");
+        assert_eq!(label(&"a".repeat(50)).len(), 32);
     }
 
     #[test]
