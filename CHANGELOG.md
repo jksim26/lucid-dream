@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 (2026-11-12)
+
+- Full session records. The Claude Code stop hook now also sends what was
+  said and done in the session (prompts, replies, each tool call and its
+  result, long ones cut short, credentials scrubbed) to
+  `logs/<date>/<session>-<agent>.record.md`. Only the new part is sent each
+  turn. Nothing loads a record; it is there to be searched or checked.
+- Search has two layers. By default it covers working memory (index, notes,
+  wiki, notes not yet merged); `deep: true` adds the archive, logs and
+  messages. A query may hold several words separated by commas, and files
+  matching more of them come first.
+- Dream links pages to each other, ends each with `Related:` and
+  `Also called:` lines, and says where a left-out detail can be found.
+- `--backup-to <folder>` on `serve` or `dream` writes the whole memory as one
+  git bundle after each dream. Off unless asked for.
+- `lucid-dream setup --codex --url URL` adds the MCP server and the memory
+  rule to the Codex CLI's own files.
+- The Grok Bot and ChatGPT briefs ask the agent to keep the logging and
+  search rules as a standing instruction; the ChatGPT relay gains `log`.
+
 ## 0.9.1 (2026-11-12)
 
 - Wrong pairing guesses no longer cancel a waiting code, which let anyone

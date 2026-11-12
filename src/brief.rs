@@ -17,9 +17,16 @@ pub fn grok(address: &str, code: &str) -> String {
          4. Call the connector's `who` tool and tell me what it lists, then call `index` to \
          load my shared memory.\n\
          \n\
-         From now on, at the start of a conversation load `index` and check `messages`; use \
-         `remember` for anything worth keeping, with `said_by` set to \"user\" only for things \
-         I decided or stated myself.\n"
+         5. Save the rest of this message as a standing instruction of your own, so it holds \
+         in every later conversation without my repeating it, and tell me that you did.\n\
+         \n\
+         Standing instruction: at the start of a conversation load `index` and check \
+         `messages`. Use `remember` for anything worth keeping, with `said_by` set to \"user\" \
+         only for things I decided or stated myself. When you look something up, give `search` \
+         several likely words separated by commas, and set `deep` to true if working memory \
+         has no answer. Nothing logs your conversations for you, so when a piece of work is \
+         finished call `log` with a short summary: what I asked, what you did, what was \
+         decided.\n"
     )
 }
 
@@ -52,7 +59,10 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          - index (no arguments): returns the memory index.\n\
          - list (dir, optional string): lists memory files.\n\
          - read (path, string): reads one memory file.\n\
-         - search (query, string; limit, optional integer): searches memory.\n\
+         - search (query, string: one or several words separated by commas; deep, optional \
+         boolean: also search the archive, session logs and messages; dir, optional string; \
+         limit, optional integer): searches memory.\n\
+         - log (summary, string): records a short summary of a finished piece of work.\n\
          - remember (text, string; said_by, optional, only ever \"user\"; topic, optional \
          string): saves a note.\n\
          - send (to, string: claude, grok, codex or all; text, string; session, optional \
@@ -65,7 +75,14 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          \n\
          The status page should call GET {address}/health and show \"reachable\" when the body \
          is ok. Keep the Site private and do not share it. When it is built, publish it and \
-         show me the plugin card to install.\n"
+         show me the plugin card to install.\n\
+         \n\
+         Also save this to your memory as a standing instruction for when you use the Lucid \
+         Dream relay: load `index` first; use `remember` for anything worth keeping, with \
+         `said_by` \"user\" only for things I decided or stated myself; give `search` several \
+         likely words separated by commas, with `deep` true if working memory has no answer; \
+         and when a piece of work is finished call `log` with a short summary of what I \
+         asked, what you did and what was decided.\n"
     )
 }
 
@@ -94,5 +111,9 @@ mod tests {
         assert!(c.contains("{\"code\": \"LD-AAAAA-BBBBB-CCCCC\"}"));
         assert!(c.contains("\"params\":{\"name\":\"NAME\",\"arguments\":ARGS}}"));
         assert!(!g.contains("ld_") && !c.contains("ld_"));
+        // Both are told, once, to keep logging and searching as a standing rule.
+        for brief in [&g, &c] {
+            assert!(brief.contains("standing instruction") && brief.contains("call `log`"));
+        }
     }
 }

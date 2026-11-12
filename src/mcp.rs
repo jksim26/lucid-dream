@@ -17,12 +17,17 @@ const INSTRUCTIONS: &str = "Shared memory for one person's agents, on every devi
 so that what any agent learns about the user, their projects and their decisions is there for \
 every other agent tomorrow.\n\n\
 Read: call `index` at the start of a session to load MEMORY.md, `read` the notes or wiki pages \
-it points to, and `search` for anything it does not mention.\n\n\
+it points to, and `search` for anything it does not mention. `search` looks in working memory \
+(the index, notes, wiki pages and notes not yet merged); give it several likely words separated \
+by commas, since it matches words, not meaning. If that finds nothing, search again with \
+`deep` true to include the archive, session logs and messages.\n\n\
 Write: call `remember` when you learn something a future session would want: a decision, a \
 correction, a preference, a fact about a project. Use your judgement about what is worth \
 keeping. Set said_by to \"user\" only for something the user themself decided or stated; leave \
 it out for your own view. You cannot edit memory directly: notes go to an inbox and a nightly \
-dream job merges them.\n\n\
+dream job merges them. If nothing logs your sessions for you (Claude Code does it with a hook), \
+call `log` before you finish a piece of work, with a short summary of what was asked, what you \
+did and what was decided.\n\n\
 Talk: `send` leaves a message for another agent (claude, codex, grok, or \"all\"); `messages` \
 returns what other agents left for you; `who` lists the agents and their sessions, so a message \
 can go to one session with `send`'s `session`. Use them to hand work over or to tell another agent \
@@ -111,12 +116,13 @@ fn tools() -> Value {
         },
         {
             "name": "search",
-            "description": "Case-insensitive text search across memory files. Returns path:line: text for each match.",
+            "description": "Case-insensitive text search of working memory: the index, notes, wiki pages and notes not yet merged. It matches words, not meaning, so give several likely words separated by commas (\"release, deploy, ship\"); files matching more of them come first. Returns path:line: text for each match.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string" },
-                    "dir": { "type": "string", "description": "Folder to search. Omit for everything." },
+                    "dir": { "type": "string", "description": "Search this folder only, such as wiki or logs. Omit for working memory." },
+                    "deep": { "type": "boolean", "description": "Also search the deeper layer: the archive, session logs and messages. Use it when working memory has no answer or you need the original detail." },
                     "limit": { "type": "integer", "description": "Most matches to return (default 50, at most 200)." }
                 },
                 "required": ["query"]
@@ -140,16 +146,17 @@ fn tools() -> Value {
         },
         {
             "name": "log",
-            "description": "Record a summary of a working session: what was asked, what was done, what was decided. Dream uses logs as evidence. Sending the same `session` again replaces that session's earlier summary.",
+            "description": "Record a summary of a working session: what was asked, what was done, what was decided. Dream uses logs as evidence. Sending the same `session` again replaces that session's earlier summary. `record` instead adds to the session's full record.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "summary": { "type": "string" },
+                    "record": { "type": "string", "description": "The next part of the session's full record: what was said and done, in order. It is added to what was sent before, never replaces it, and needs `session`. Hooks send this; an agent normally sends only `summary`." },
                     "session": { "type": "string", "description": "The session's id, if it has one." },
                     "device": { "type": "string" },
                     "project": { "type": "string", "description": "The folder or project the session worked in." }
                 },
-                "required": ["summary"]
+                "required": []
             },
             "annotations": add_only,
         },
@@ -315,9 +322,16 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                 .and_then(Value::as_u64)
                 .unwrap_or(DEFAULT_SEARCH_LIMIT)
                 .clamp(1, MAX_SEARCH_LIMIT) as usize;
+            let (dir, deep) = (text("dir"), args.get("deep") == Some(&Value::Bool(true)));
             store
-                .search(&required("query")?, &text("dir"), limit)
+                .search(&required("query")?, &dir, limit, deep)
                 .map(|hits| {
+                    if hits.is_empty() && dir.trim().is_empty() && !deep {
+                        return "no matches in working memory; try other words separated by \
+                                commas, or search again with deep true to include the archive, \
+                                session logs and messages"
+                            .to_string();
+                    }
                     if hits.is_empty() {
                         return "no matches".to_string();
                     }
@@ -349,6 +363,9 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                 })
             }
         }
+        "log" if args.get("record").is_some() && args.get("summary").is_none() => store
+            .record(who, &text("session"), &required("record")?, &Utc::now())
+            .map(|path| format!("recorded: {path}")),
         "log" => {
             let summary = required("summary")?;
             let log = Log {

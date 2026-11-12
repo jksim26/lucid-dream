@@ -1,7 +1,8 @@
 //! Device hooks for Claude Code.
 //!
 //! `session-start` prints the memory index, which Claude Code adds to the
-//! session's context. `stop` sends a summary of the session to `logs/`.
+//! session's context. `stop` sends a summary of the session to `logs/`, and
+//! the part of its full record (what was said and done) not yet sent.
 //! Both must never get in the way: the caller ignores their errors, so a
 //! sleeping PC or a missing network only means no memory this time.
 
@@ -17,6 +18,17 @@ use crate::util::redact;
 const MAX_PROMPTS: usize = 20;
 const MAX_PROMPT_CHARS: usize = 500;
 const MAX_REPLY_CHARS: usize = 1500;
+/// The full record keeps everything said, but one huge paste, command or
+/// tool result is cut to these lengths so a file read does not swamp it.
+const MAX_RECORD_TEXT_CHARS: usize = 20_000;
+const MAX_RECORD_INPUT_CHARS: usize = 2_000;
+const MAX_RECORD_RESULT_CHARS: usize = 4_000;
+/// One call's worth of record, and how many calls one turn may spend. A long
+/// session met for the first time catches up over its next few turns.
+const RECORD_PART_BYTES: usize = 150 * 1024;
+const MAX_RECORD_PARTS: usize = 6;
+/// No new part is started this long after the hook began.
+const RECORD_BUDGET: Duration = Duration::from_millis(2500);
 
 /// The name of the folder a session works in. It tells sessions apart only
 /// where the client gives them no id.
@@ -115,6 +127,7 @@ pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
 
 /// `input` is the JSON Claude Code passes a Stop hook on stdin.
 pub fn stop(client: &Client, input: &str) -> Result<(), String> {
+    let started = std::time::Instant::now();
     let input: Value = serde_json::from_str(input).map_err(|e| format!("bad hook input: {e}"))?;
     let transcript = input["transcript_path"]
         .as_str()
@@ -128,24 +141,134 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
         let _ = client.call("check_in", who_i_am(&input));
     }
     let (prompts, transcript_reply) = read_transcript(&transcript);
-    if prompts.is_empty() {
-        return Ok(());
+    // The summary goes first: Claude Code gives this hook only a few seconds,
+    // and the summary is what the dream reads.
+    let summary = if prompts.is_empty() {
+        Ok(String::new())
+    } else {
+        let reply = input["last_assistant_message"]
+            .as_str()
+            .map(str::to_string)
+            .or(transcript_reply)
+            .unwrap_or_default();
+        client.call(
+            "log",
+            json!({
+                "summary": summarize(&prompts, &reply),
+                "session": input["session_id"].as_str().unwrap_or(""),
+                "project": input["cwd"].as_str().unwrap_or(""),
+                "device": hostname(),
+            }),
+        )
+    };
+    // The record is extra: it uses the time that is left, and what it does
+    // not send now it sends after the next turn.
+    if let Some(id) = input["session_id"].as_str().filter(|id| !id.is_empty()) {
+        if let Ok(dir) = state_dir("record") {
+            let mark = dir.join(crate::util::label(id));
+            let _ = send_record(client, id, &transcript, &mark, started + RECORD_BUDGET);
+        }
     }
-    let reply = input["last_assistant_message"]
-        .as_str()
-        .map(str::to_string)
-        .or(transcript_reply)
-        .unwrap_or_default();
-    client.call(
-        "log",
-        json!({
-            "summary": summarize(&prompts, &reply),
-            "session": input["session_id"].as_str().unwrap_or(""),
-            "project": input["cwd"].as_str().unwrap_or(""),
-            "device": hostname(),
-        }),
-    )?;
-    Ok(())
+    summary.map(|_| ())
+}
+
+/// One transcript line as Markdown for the session's record: what the user
+/// typed, what the assistant said, each tool call and its result. Empty for
+/// lines that carry none of those (thinking, harness plumbing).
+fn record_entry(line: &str) -> String {
+    let Ok(entry) = serde_json::from_str::<Value>(line) else {
+        return String::new();
+    };
+    let who = match entry["type"].as_str() {
+        Some("user") => "User",
+        Some("assistant") => "Assistant",
+        _ => return String::new(),
+    };
+    let at = entry["timestamp"].as_str().unwrap_or("");
+    let said = |text: &str| {
+        let text = text.trim();
+        // Text starting with a tag is harness plumbing, not something typed.
+        if text.is_empty() || (who == "User" && (entry["isMeta"] == true || text.starts_with('<')))
+        {
+            return String::new();
+        }
+        format!("\n### {who} {at}\n{}\n", clip(text, MAX_RECORD_TEXT_CHARS))
+    };
+    let blocks = match &entry["message"]["content"] {
+        Value::String(text) => return redact(&said(text)),
+        Value::Array(blocks) => blocks,
+        _ => return String::new(),
+    };
+    let mut out = String::new();
+    for block in blocks {
+        match block["type"].as_str() {
+            Some("text") => out.push_str(&said(block["text"].as_str().unwrap_or(""))),
+            Some("tool_use") => out.push_str(&format!(
+                "- tool {} {at}: {}\n",
+                block["name"].as_str().unwrap_or("?"),
+                clip(&block["input"].to_string(), MAX_RECORD_INPUT_CHARS)
+            )),
+            Some("tool_result") => {
+                let result = match &block["content"] {
+                    Value::String(text) => text.clone(),
+                    other => message_text(other),
+                };
+                let one_line = result.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !one_line.is_empty() {
+                    out.push_str(&format!(
+                        "  - result: {}\n",
+                        clip(&one_line, MAX_RECORD_RESULT_CHARS)
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    redact(&out)
+}
+
+/// Send the transcript lines not yet sent as parts of the session's record.
+/// `mark` remembers how many lines have gone, so each line is sent once; it
+/// moves only after the server has taken a part.
+fn send_record(
+    client: &Client,
+    session: &str,
+    transcript: &str,
+    mark: &std::path::Path,
+    until: std::time::Instant,
+) -> Result<(), String> {
+    let lines: Vec<&str> = transcript.lines().collect();
+    let mut sent: usize = fs::read_to_string(mark)
+        .ok()
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0);
+    if sent > lines.len() {
+        sent = 0; // a different, shorter transcript: start over
+    }
+    let mut part = String::new();
+    let mut parts = 0;
+    let flush = |part: &mut String, upto: usize| -> Result<(), String> {
+        if !part.is_empty() {
+            client.call(
+                "log",
+                json!({ "record": part.as_str(), "session": session }),
+            )?;
+            part.clear();
+        }
+        fs::write(mark, upto.to_string()).map_err(|e| e.to_string())
+    };
+    for (i, line) in lines.iter().enumerate().skip(sent) {
+        let entry = record_entry(line);
+        if !part.is_empty() && part.len() + entry.len() > RECORD_PART_BYTES {
+            flush(&mut part, i)?;
+            parts += 1;
+            if parts >= MAX_RECORD_PARTS || std::time::Instant::now() >= until {
+                return Ok(());
+            }
+        }
+        part.push_str(&entry);
+    }
+    flush(&mut part, lines.len())
 }
 
 /// The user's prompts, and the last thing the assistant said, from a Claude
@@ -231,13 +354,18 @@ pub fn hostname() -> String {
 /// It lives in the user's home, not the shared temp folder, where another
 /// user of the machine could plant a link for these files to be written through.
 fn wait_dir() -> Result<std::path::PathBuf, String> {
+    state_dir("wait")
+}
+
+/// A private folder under `~/.lucid-dream` for this machine's own notes.
+fn state_dir(name: &str) -> Result<std::path::PathBuf, String> {
     let home = ["HOME", "USERPROFILE"]
         .iter()
         .find_map(|key| std::env::var_os(key).filter(|v| !v.is_empty()))
         .ok_or("no home folder")?;
     let dir = std::path::PathBuf::from(home)
         .join(".lucid-dream")
-        .join("wait");
+        .join(name);
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -465,6 +593,39 @@ not json
             summary,
             "## Asked\n- here it is [redacted] thanks\n\n## Last reply\nStored. Authorization: Bearer [redacted]\n"
         );
+    }
+
+    #[test]
+    fn a_record_entry_keeps_what_was_said_and_done_without_secrets() {
+        let user = r#"{"type":"user","timestamp":"2026-11-12T10:00:00Z","message":{"content":"Fix the login bug"}}"#;
+        assert_eq!(
+            record_entry(user),
+            "\n### User 2026-11-12T10:00:00Z\nFix the login bug\n"
+        );
+        let work = r#"{"type":"assistant","timestamp":"T1","message":{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Looking."},{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+        assert_eq!(
+            record_entry(work),
+            "\n### Assistant T1\nLooking.\n- tool Bash T1: {\"command\":\"cargo test\"}\n"
+        );
+        let result = r#"{"type":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"ok\n84 passed  Bearer abcdef"}]}]}}"#;
+        assert_eq!(
+            record_entry(result),
+            "  - result: ok 84 passed Bearer [redacted]\n"
+        );
+        // Plumbing, thinking alone and other line types leave nothing.
+        for quiet in [
+            r#"{"type":"user","message":{"content":"<system-reminder>x</system-reminder>"}}"#,
+            r#"{"type":"user","isMeta":true,"message":{"content":"meta"}}"#,
+            r#"{"type":"summary","summary":"x"}"#,
+            "not json",
+        ] {
+            assert_eq!(record_entry(quiet), "", "{quiet}");
+        }
+        let long = format!(
+            r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","content":"{}"}}]}}}}"#,
+            "a ".repeat(MAX_RECORD_RESULT_CHARS)
+        );
+        assert!(record_entry(&long).chars().count() < MAX_RECORD_RESULT_CHARS + 40);
     }
 
     #[test]

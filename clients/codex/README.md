@@ -7,13 +7,21 @@
    lucid-dream token add codex --root <memory dir>
    ```
 
-2. Export it where Codex runs as `LUCID_TOKEN_CODEX`, and add
-   [config.example.toml](config.example.toml) to `~/.codex/config.toml`. On
-   the machine that holds the memory the address is
-   `http://127.0.0.1:7878/mcp`.
+2. Export it where Codex runs as `LUCID_TOKEN_CODEX`, then let lucid-dream add
+   the server and the memory rule to Codex's own files (`--plan` only shows
+   what it would add):
 
-3. Append [AGENTS.md](AGENTS.md) to `~/.codex/AGENTS.md`. Codex has no session
-   hooks, so this rule is what makes it load the index and log its sessions.
+   ```bash
+   lucid-dream setup --codex --url http://<pc-name>:7878/mcp
+   ```
+
+   On the machine that holds the memory the address is
+   `http://127.0.0.1:7878/mcp`. It adds a `[mcp_servers.lucid-dream]` block to
+   `~/.codex/config.toml` ([config.example.toml](config.example.toml)) and
+   [AGENTS.md](AGENTS.md) to `~/.codex/AGENTS.md`, each once, keeping a copy
+   of the file as it was. Codex has no session hooks, so that rule is what
+   makes it load the index and log its sessions. To undo it, delete those
+   two additions.
 
 Check it: start Codex and ask it to "call `who` on lucid-dream". It should
 list `codex (you)`.

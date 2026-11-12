@@ -206,6 +206,68 @@ pub fn uninstall(settings: &Path, dry: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The rule that makes Codex load the index and log its sessions. Codex has
+/// no session hooks, so its instructions file is where this has to live.
+const CODEX_RULE: &str = include_str!("../clients/codex/AGENTS.md");
+const CODEX_RULE_MARK: &str = "## Shared memory (lucid-dream)";
+const CODEX_SERVER_MARK: &str = "[mcp_servers.lucid-dream]";
+pub const CODEX_TOKEN_ENV: &str = "LUCID_TOKEN_CODEX";
+
+/// Connect the Codex CLI on this machine: add the server to its config and
+/// the rule to its instructions. Both files are only added to, and only once;
+/// a copy of each is kept beside it before the first change.
+pub fn codex(home: &Path, url: &str, dry: bool) -> Result<(), String> {
+    let server = format!(
+        "{CODEX_SERVER_MARK}\nurl = \"{}\"\nbearer_token_env_var = \"{CODEX_TOKEN_ENV}\"\n\
+         default_tools_approval_mode = \"approve\"\n",
+        url.replace(['"', '\\', '\n'], "")
+    );
+    let additions = [
+        (
+            "config.toml",
+            CODEX_SERVER_MARK,
+            server.as_str(),
+            "the lucid-dream MCP server",
+        ),
+        (
+            "AGENTS.md",
+            CODEX_RULE_MARK,
+            CODEX_RULE,
+            "the shared-memory rule",
+        ),
+    ];
+    for (name, mark, addition, what) in additions {
+        let file = home.join(name);
+        let io = |e: std::io::Error| format!("{}: {e}", file.display());
+        let before = match fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(io(e)),
+        };
+        if before.contains(mark) {
+            println!("{}: already has {what}", file.display());
+            continue;
+        }
+        if dry {
+            println!("{}: would add {what}:\n\n{addition}", file.display());
+            continue;
+        }
+        fs::create_dir_all(home).map_err(io)?;
+        if !before.is_empty() {
+            fs::write(home.join(format!("{name}.before-lucid-dream")), &before).map_err(io)?;
+        }
+        let gap = match before.as_str() {
+            "" => "",
+            text if text.ends_with("\n\n") => "",
+            text if text.ends_with('\n') => "\n",
+            _ => "\n\n",
+        };
+        fs::write(&file, format!("{before}{gap}{addition}")).map_err(io)?;
+        println!("{}: added {what}", file.display());
+    }
+    Ok(())
+}
+
 fn object<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
     let slot = parent.entry(key).or_insert_with(|| json!({}));
     if !slot.is_object() {
@@ -361,6 +423,35 @@ mod tests {
         assert_eq!(start[1]["asyncRewake"], true);
         assert!(start[0].get("asyncRewake").is_none());
         assert_eq!(merge(&merged, &plan()).1, Vec::<String>::new());
+    }
+
+    #[test]
+    fn codex_gets_the_server_and_the_rule_once_and_keeps_what_it_had() {
+        let dir = std::env::temp_dir().join(format!("lucid-codex-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.toml"), "model = \"gpt\"").unwrap();
+        let read = |name: &str| fs::read_to_string(dir.join(name)).unwrap();
+
+        // A preview changes nothing.
+        codex(&dir, "http://pc:7878/mcp", true).unwrap();
+        assert_eq!(read("config.toml"), "model = \"gpt\"");
+        assert!(!dir.join("AGENTS.md").exists());
+
+        codex(&dir, "http://pc:7878/mcp", false).unwrap();
+        let config = read("config.toml");
+        assert!(config.starts_with("model = \"gpt\"\n\n[mcp_servers.lucid-dream]\n"));
+        assert!(config.contains("url = \"http://pc:7878/mcp\"\n"));
+        assert!(config.contains("bearer_token_env_var = \"LUCID_TOKEN_CODEX\""));
+        assert_eq!(read("config.toml.before-lucid-dream"), "model = \"gpt\"");
+        assert!(read("AGENTS.md").starts_with(CODEX_RULE_MARK));
+        assert!(read("AGENTS.md").contains("call `log`"));
+
+        // Again: nothing is added twice.
+        codex(&dir, "http://other:1/mcp", false).unwrap();
+        assert_eq!(read("config.toml"), config);
+        assert_eq!(read("AGENTS.md").matches(CODEX_RULE_MARK).count(), 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

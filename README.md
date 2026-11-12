@@ -151,7 +151,11 @@ memory is deliberately small and readable.
 
 Where lucid-dream is behind, so you know before you install it:
 
-- Search scans the Markdown files; there is no index, no entities, no vectors.
+- Search matches words, not meaning: it scans the Markdown files with no index,
+  entities or vectors. Dream adds links and alternative words to each page to
+  make up for part of that.
+- Only Claude Code sessions are recorded in full by a hook. Other agents log
+  a summary when they choose to.
 - Dream needs an agent CLI you are logged in to (Claude Code or Codex). With
   none, memory still works but nobody tidies it.
 - Only Claude Code sessions and agents with a webhook are woken. The phone
@@ -169,10 +173,16 @@ Anthropic's [The components of agent memory](https://www.anthropic.com/research/
 | Their component | Here |
 | --- | --- |
 | Memory notes, written when something is worth keeping | `remember` adds a note to `inbox/`, tagged with who said it |
-| Session logs, the record to check notes against | `logs/`, written by a hook or the `log` tool when a session ends |
+| Session logs, the record to check notes against | `logs/`: a short summary per session, and for Claude Code the full record of what was said and done, added by a hook after every turn |
 | Dreaming, which corrects mistakes and reorganises offline | `lucid-dream dream`, nightly, with the log as the better witness |
-| Memory representations such as a wiki | `wiki/` (one page per project, person, tool) and `notes/` |
+| Memory representations such as a wiki | `wiki/` (one page per project, person, tool) and `notes/`, linked to each other by dream |
 | What is loaded ahead of a session | `MEMORY.md`, the index, kept under 200 lines |
+| Lower layers, read or searched when needed | `search` covers working memory; `deep` adds the archive, logs and messages |
+
+Memory has layers, and only the top one is loaded. The index points to
+pages; pages link to each other and say where the finer detail is; the
+archive and the session records hold everything, unbounded, and are looked
+at only when an agent asks to go deeper. Nothing is pruned.
 
 What lucid-dream adds is that the writers and readers are different vendors'
 agents on different devices, so each note carries its voice and each agent
@@ -187,7 +197,7 @@ this repo**: this repo is public, and the store holds your notes.
 | Path | What it holds | Who writes |
 | --- | --- | --- |
 | `inbox/` | Raw notes, one file each, tagged `source` + `said_by` | Agents, add-only |
-| `logs/` | Session summaries by date | Stop hook, `log` tool |
+| `logs/` | Session summaries by date, and `<session>.record.md` files holding a session's full record | Stop hook, `log` tool |
 | `messages/` | Messages the agents sent each other | `send` tool |
 | `notes/` | Consolidated notes, one topic per file | Dream |
 | `wiki/` | One page per entity (project, person, tool) | Dream |
@@ -247,9 +257,10 @@ The server offers eleven tools:
 | Tool | What it does |
 | --- | --- |
 | `index` | Returns `MEMORY.md` |
-| `list`, `read`, `search` | Browse and search the store |
+| `list`, `read` | Browse the store |
+| `search` | Searches working memory for any of several comma-separated words; `deep` adds the archive, logs and messages |
 | `remember` | Adds a note to `inbox/` for dream to merge |
-| `log` | Records a session summary in `logs/` |
+| `log` | Records a session summary in `logs/`, or adds to the session's full record |
 | `send` | Leaves a message for another agent, or for `all`; `session` narrows it to one session by number |
 | `check_in` | Announces a session and returns its number |
 | `who` | Lists the agents and their sessions, and which are listening now |
@@ -289,8 +300,11 @@ session, in well under a second. It also checks every 20 seconds in case the
 connection dropped. See
 [clients/claude-code](clients/claude-code#live-messages-channel).
 
-Session logs are scrubbed of anything that looks like a credential before they
-are sent, since logs become memory every agent can read.
+Session logs and records are scrubbed of anything that looks like a credential
+before they are sent, since they become memory every agent can read. A record
+holds what was typed, what the agent said, and each tool call with its result
+(long ones cut short), so it can contain anything that appeared in the
+session: keep that in mind before working with private material.
 
 ## Tokens and doors
 
@@ -441,6 +455,12 @@ Dream commits whatever arrived since last time (`intake: ...`), hands the inbox 
 an agent with [this prompt](src/dream_prompt.md), and commits the result
 (`dream: <date>`). Review it with `git show --stat`; undo it with `git revert`.
 `--dry-run` shows what it would do.
+
+To keep a copy somewhere else, add `--backup-to <folder>` (to `dream` or to
+`serve`): after each dream the whole memory, with its history, is written
+there as one file, `lucid-memory.bundle`. Point it at a second disk or a
+folder a cloud drive syncs. `git clone lucid-memory.bundle <dir>` restores it.
+The file is not encrypted, and tokens are not in it.
 
 - The agent is `claude -p` with edits allowed and only `git mv` and `mkdir` as
   commands. It runs on your Claude subscription; no API key is needed. Set

@@ -20,6 +20,11 @@ pub const MAX_NOTE_BYTES: usize = 64 * 1024;
 const MAX_LIST_ENTRIES: usize = 2000;
 const MAX_HIT_CHARS: usize = 300;
 const SEARCHABLE: [&str; 2] = ["md", "txt"];
+/// The deeper layer: what has been processed or is only evidence. A search
+/// leaves these out unless it is asked to go deep.
+const DEEP_DIRS: [&str; 3] = ["archive/", "logs/", "messages/"];
+/// The most one call may add to a session's record.
+pub const MAX_RECORD_BYTES: usize = 256 * 1024;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -115,6 +120,16 @@ fn check_text(text: &str) -> Result<&str, StoreError> {
         )));
     }
     Ok(text)
+}
+
+/// A session id reduced to what is safe in a file name.
+fn session_label(session: &str) -> Option<String> {
+    let label: String = session
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(64)
+        .collect();
+    (!label.is_empty()).then_some(label)
 }
 
 fn check_name(what: &str, name: &str) -> Result<(), StoreError> {
@@ -272,15 +287,7 @@ impl Store {
     pub fn log(&self, log: &Log, now: &Utc) -> Result<String, StoreError> {
         check_name("source", log.source)?;
         let text = check_text(log.summary)?;
-        let session: Option<String> = log
-            .session
-            .map(|s| {
-                s.chars()
-                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-                    .take(64)
-                    .collect()
-            })
-            .filter(|s: &String| !s.is_empty());
+        let session = log.session.and_then(session_label);
         let name = match &session {
             Some(session) => format!("{session}-{}.md", log.source),
             None => {
@@ -305,6 +312,51 @@ impl Store {
         Ok(rel)
     }
 
+    /// Add the next part of a session's full record (what was said and done,
+    /// in order) to `logs/<date>/<session>-<source>.record.md`. Parts are
+    /// only ever added, never replaced. The record is the deepest layer of
+    /// memory: nothing loads it, it is there to be searched or checked.
+    pub fn record(
+        &self,
+        source: &str,
+        session: &str,
+        part: &str,
+        now: &Utc,
+    ) -> Result<String, StoreError> {
+        check_name("source", source)?;
+        let session = session_label(session)
+            .ok_or_else(|| StoreError::Invalid("a record needs its session's id".into()))?;
+        if part.trim().is_empty() {
+            return Err(StoreError::Invalid("record is empty".into()));
+        }
+        if part.len() > MAX_RECORD_BYTES {
+            return Err(StoreError::Invalid(format!(
+                "record part is over {MAX_RECORD_BYTES} bytes; send it in smaller parts"
+            )));
+        }
+        let rel = format!("logs/{}/{session}-{source}.record.md", now.date());
+        let path = self.root.join(&rel);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)?;
+        if file.metadata()?.len() == 0 {
+            file.write_all(
+                format!(
+                    "---\nsource: {source}\nsession: {session}\nkind: record\nat: {}\n---\n\n",
+                    now.iso()
+                )
+                .as_bytes(),
+            )?;
+        }
+        file.write_all(part.trim().as_bytes())?;
+        file.write_all(b"\n\n")?;
+        Ok(rel)
+    }
+
     /// Write a file at a path this module built from checked parts.
     fn create(&self, rel: &str, body: &str, replace: bool) -> Result<(), StoreError> {
         let path = self.root.join(rel);
@@ -322,17 +374,34 @@ impl Store {
         Ok(())
     }
 
-    /// Case-insensitive substring search over text files under `dir`.
-    pub fn search(&self, query: &str, dir: &str, limit: usize) -> Result<Vec<Hit>, StoreError> {
-        let needle = query.to_lowercase();
-        let mut hits = Vec::new();
-        if needle.trim().is_empty() {
-            return Ok(hits);
+    /// Case-insensitive text search under `dir`. `query` may hold several
+    /// alternatives separated by commas ("release, deploy, ship"); a line
+    /// matches when it contains any of them, and files that match more of
+    /// them come first. With no `dir` and `deep` false, only working memory
+    /// is searched: the archive, logs and messages are the deeper layer.
+    pub fn search(
+        &self,
+        query: &str,
+        dir: &str,
+        limit: usize,
+        deep: bool,
+    ) -> Result<Vec<Hit>, StoreError> {
+        let lowered = query.to_lowercase();
+        let terms: Vec<&str> = lowered
+            .split(',')
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
         }
+        let working_only = dir.trim().is_empty() && !deep;
         let start = self.resolve(dir)?;
         let mut files = Vec::new();
         self.walk(&start, &mut files)?;
         files.sort();
+        // (how many of the terms the file matched, its hits)
+        let mut found: Vec<(usize, Vec<Hit>)> = Vec::new();
         for file in files {
             let searchable = file
                 .extension()
@@ -341,28 +410,47 @@ impl Store {
             if !searchable {
                 continue;
             }
+            let rel = self.rel(&file);
+            if working_only && DEEP_DIRS.iter().any(|deep| rel.starts_with(deep)) {
+                continue;
+            }
             // Unreadable or non-UTF-8 files are skipped rather than failing the search.
             let Ok(text) = fs::read_to_string(&file) else {
                 continue;
             };
+            let mut matched = vec![false; terms.len()];
+            let mut hits = Vec::new();
             for (i, line) in text.lines().enumerate() {
-                if line.to_lowercase().contains(&needle) {
+                let line_lower = line.to_lowercase();
+                let mut hit = false;
+                for (n, term) in terms.iter().enumerate() {
+                    if line_lower.contains(term) {
+                        matched[n] = true;
+                        hit = true;
+                    }
+                }
+                if hit && hits.len() < limit {
                     hits.push(Hit {
-                        path: self.rel(&file),
+                        path: rel.clone(),
                         line: i + 1,
                         text: line.trim().chars().take(MAX_HIT_CHARS).collect(),
                     });
-                    if hits.len() >= limit {
-                        return Ok(hits);
-                    }
                 }
             }
+            if !hits.is_empty() {
+                found.push((matched.iter().filter(|m| **m).count(), hits));
+            }
         }
-        Ok(hits)
+        // Stable: files that match equally stay in path order.
+        found.sort_by_key(|file| std::cmp::Reverse(file.0));
+        Ok(found
+            .into_iter()
+            .flat_map(|(_, hits)| hits)
+            .take(limit)
+            .collect())
     }
 }
 
-/// The recipient that means every agent.
 pub const EVERYONE: &str = "all";
 
 const MAX_MESSAGES: usize = 50;
@@ -1336,10 +1424,86 @@ pub mod tests {
     fn searches_case_insensitively_with_a_limit() {
         let t = Temp::new();
         let s = t.store();
-        let hits = s.search("RUST", "", 10).unwrap();
+        let hits = s.search("RUST", "", 10, false).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!((hits[1].path.as_str(), hits[1].line), ("notes/rust.md", 1));
-        assert_eq!(s.search("rust", "", 1).unwrap().len(), 1);
-        assert!(s.search("  ", "", 10).unwrap().is_empty());
+        assert_eq!(s.search("rust", "", 1, false).unwrap().len(), 1);
+        assert!(s.search("  ", "", 10, false).unwrap().is_empty());
+        assert!(s.search(" , ", "", 10, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn several_words_find_more_and_the_best_file_comes_first() {
+        let t = Temp::new();
+        let s = t.store();
+        fs::create_dir_all(t.0.join("wiki")).unwrap();
+        fs::write(t.0.join("wiki/a.md"), "We ship on Fridays.\n").unwrap();
+        fs::write(
+            t.0.join("wiki/z.md"),
+            "Release rule: deploy after tests.\nWe ship it then.\n",
+        )
+        .unwrap();
+        assert!(s.search("deploy policy", "", 10, false).unwrap().is_empty());
+        let hits = s.search("Release, deploy , ship", "", 10, false).unwrap();
+        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        // z.md matches all three words, a.md one: z.md first despite its name.
+        assert_eq!(paths, ["wiki/z.md", "wiki/z.md", "wiki/a.md"]);
+    }
+
+    #[test]
+    fn the_archive_logs_and_messages_are_searched_only_when_going_deep() {
+        let t = Temp::new();
+        let s = t.store();
+        for dir in [
+            "archive/inbox",
+            "logs/2026-11-12",
+            "messages/2026-11-12",
+            "inbox",
+        ] {
+            fs::create_dir_all(t.0.join(dir)).unwrap();
+            fs::write(t.0.join(dir).join("x.md"), "the zebra detail\n").unwrap();
+        }
+        let paths = |deep, dir| -> Vec<String> {
+            let hits = s.search("zebra", dir, 10, deep).unwrap();
+            hits.into_iter().map(|h| h.path).collect()
+        };
+        // Notes not yet dreamed are working memory; processed ones are not.
+        assert_eq!(paths(false, ""), ["inbox/x.md"]);
+        assert_eq!(paths(true, "").len(), 4);
+        // Naming a folder searches it, whichever layer it is in.
+        assert_eq!(paths(false, "logs"), ["logs/2026-11-12/x.md"]);
+    }
+
+    #[test]
+    fn a_session_record_grows_and_is_never_replaced() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::from_unix(1_700_000_000);
+        let first = s
+            .record("claude", "ab/../12", "### User\nhello", &now)
+            .unwrap();
+        let second = s
+            .record("claude", "ab12", "### Assistant\nhi\n", &now)
+            .unwrap();
+        assert_eq!(first, "logs/2023-11-14/ab12-claude.record.md");
+        assert_eq!(first, second);
+        let text = s.read(&first).unwrap();
+        assert!(text.starts_with("---\nsource: claude\nsession: ab12\nkind: record\n"));
+        assert!(text.ends_with("### User\nhello\n\n### Assistant\nhi\n\n"));
+        assert_eq!(text.matches("kind: record").count(), 1);
+        for (session, part) in [("", "x"), ("../", "x"), ("s1", "  ")] {
+            assert!(s.record("claude", session, part, &now).is_err());
+        }
+        let big = "x".repeat(MAX_RECORD_BYTES + 1);
+        assert!(s.record("claude", "s1", &big, &now).is_err());
+        // The summary log of the same session is a different file.
+        let log = Log {
+            source: "claude",
+            summary: "sum",
+            session: Some("ab12"),
+            device: None,
+            project: None,
+        };
+        assert_ne!(s.log(&log, &now).unwrap(), first);
     }
 }

@@ -13,6 +13,9 @@ const INDEX_LINE_LIMIT: usize = 200;
 
 /// Set for the agent that dream runs; `lucid-dream hook` does nothing when it is.
 pub const DREAMING_ENV: &str = "LUCID_DREAMING";
+/// A folder to copy the whole memory into after each dream, if set.
+pub const BACKUP_ENV: &str = "LUCID_BACKUP_DIR";
+pub const BACKUP_FILE: &str = "lucid-memory.bundle";
 
 /// Tools the default agent may use. It can edit files and move them; nothing else.
 const CLAUDE_TOOLS: [&str; 7] = [
@@ -148,16 +151,54 @@ fn run_locked(root: &Path, by: &str, started: i64) -> Result<String, String> {
         by: by.to_string(),
     };
     record(root, &status);
-    let outcome = dream(root, false);
+    let outcome = dream(root, false).map(|summary| {
+        let folder = std::env::var_os(BACKUP_ENV).filter(|dir| !dir.is_empty());
+        match folder.map(|dir| backup(root, Path::new(&dir))) {
+            None => summary,
+            Some(Ok(file)) => format!("{summary}\nbacked up to {file}"),
+            Some(Err(e)) => format!("{summary}\nwarning: backup failed: {e}"),
+        }
+    });
     let _ = fs::remove_file(lock_file(root));
     status.finished = crate::util::unix_now();
     status.ok = outcome.is_ok();
     status.message = match &outcome {
-        Ok(summary) => summary.lines().next().unwrap_or("").to_string(),
+        // The first line says what the dream did; a failed backup must show too.
+        Ok(summary) => summary
+            .lines()
+            .enumerate()
+            .filter(|(i, line)| *i == 0 || line.starts_with("warning: backup"))
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("; "),
         Err(e) => e.clone(),
     };
     record(root, &status);
     outcome
+}
+
+/// Copy the whole memory, with its history, into `folder` as one file: a git
+/// bundle, which `git clone <file> <dir>` turns back into the store. It
+/// holds what git holds, so tokens and the rest of `.lucid/` are not in it.
+/// The file is written beside its final name and moved into place, so a
+/// syncing folder never sees a half-written backup.
+pub fn backup(root: &Path, folder: &Path) -> Result<String, String> {
+    let io = |e: std::io::Error| format!("{}: {e}", folder.display());
+    fs::create_dir_all(folder).map_err(io)?;
+    let (file, part) = (
+        folder.join(BACKUP_FILE),
+        folder.join(format!("{BACKUP_FILE}.part")),
+    );
+    let _ = fs::remove_file(&part);
+    if let Err(e) = git(
+        root,
+        &["bundle", "create", "-q", &part.to_string_lossy(), "--all"],
+    ) {
+        let _ = fs::remove_file(&part);
+        return Err(e);
+    }
+    fs::rename(&part, &file).map_err(io)?;
+    Ok(file.display().to_string())
 }
 
 /// Dream once, with nothing else dreaming at the same time, and record how
@@ -736,6 +777,35 @@ mod tests {
             "keep me\n"
         );
         assert!(store.join("archive/inbox/a.md").exists() && !store.join("inbox/a.md").exists());
+    }
+
+    #[test]
+    fn a_backup_is_one_file_that_clones_back_into_the_memory() {
+        let t = Temp::new();
+        let store = t.0.join("store");
+        init::run(&store).unwrap();
+        git(&store, &["config", "user.email", "test@example.invalid"]).unwrap();
+        git(&store, &["config", "user.name", "test"]).unwrap();
+        fs::write(store.join("notes/keep.md"), "keep me\n").unwrap();
+        fs::create_dir_all(store.join(".lucid")).unwrap();
+        fs::write(store.join(".lucid/tokens"), "secret\n").unwrap();
+        git(&store, &["add", "-A"]).unwrap();
+        git(&store, &["commit", "-q", "-m", "intake"]).unwrap();
+
+        let folder = t.0.join("drive/backups");
+        let file = backup(&store, &folder).unwrap();
+        assert!(file.ends_with(BACKUP_FILE));
+        // A second backup replaces the first and leaves nothing half-written.
+        backup(&store, &folder).unwrap();
+        assert_eq!(count_files(&folder), 1);
+
+        let restored = t.0.join("restored");
+        git(&t.0, &["clone", "-q", &file, &restored.to_string_lossy()]).unwrap();
+        assert_eq!(
+            fs::read_to_string(restored.join("notes/keep.md")).unwrap(),
+            "keep me\n"
+        );
+        assert!(!restored.join(".lucid").exists());
     }
 
     #[test]

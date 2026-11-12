@@ -176,10 +176,19 @@ did, and `git revert` undoes it. It runs on your ChatGPT subscription.
 You can also ask any connected agent to do it: "use lucid-dream to tidy the
 memory now". And `lucid-dream doctor` says if the last dream failed.
 
-**Codex as a memory client** (optional). Follow
-[clients/codex](../clients/codex/README.md): three lines in
-`~/.codex/config.toml`, the `codex` token in an environment variable, and a
-rule in `AGENTS.md`.
+**Codex as a memory client** (optional). Put the `codex` token from step 2 in
+the environment variable `LUCID_TOKEN_CODEX`, then:
+
+```bash
+lucid-dream setup --codex --url http://127.0.0.1:7878/mcp
+```
+
+It adds the server to `~/.codex/config.toml` and the memory rule to
+`~/.codex/AGENTS.md`. More in [clients/codex](../clients/codex/README.md).
+
+**A copy somewhere else** (optional, recommended). Add `--backup-to <folder>`
+to the `serve` command in step 3, naming a second disk or a folder your cloud
+drive syncs. After each dream the whole memory is written there as one file.
 
 ## 8. Check it
 
@@ -197,6 +206,10 @@ through Lucid Dream relay". Grok Bot should wake and tell you it arrived.
 | Grok Bot | yes | yes | yes, by webhook |
 | ChatGPT (Site plugin) | yes | yes | no, reads when asked |
 | Codex CLI | yes | yes | no, reads at session start |
+
+None of these three is logged automatically. Each is told, in the block you
+paste or in its `AGENTS.md`, to log a short summary when a piece of work is
+done; whether it does is up to the agent.
 
 ## Turning something off
 

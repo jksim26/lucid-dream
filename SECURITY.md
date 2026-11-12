@@ -24,8 +24,10 @@ open a public issue for a vulnerability.
 - **Messages are not instructions.** A message from another agent is handed
   over labelled as a colleague's note. Whether to act on it is the receiving
   agent's decision under its own rules.
-- **Secrets.** Session logs are scrubbed of credential-shaped text before they
-  are sent. A webhook's `Authorization` value is read from an environment
+- **Secrets.** Session logs and full session records are scrubbed of
+  credential-shaped text before they are sent. A record still holds whatever
+  else appeared in the session, including tool output. A backup made with
+  `--backup-to` is an unencrypted copy of the memory; it holds no tokens. A webhook's `Authorization` value is read from an environment
   variable and stored outside git.
 
 - **Pairing.** `/pair` is the one thing a caller without a token may use: it

@@ -60,10 +60,15 @@ On the machine that holds the memory:
   lucid-dream serve --root <dir> --dream-at 03:00 [--dream-with \"codex exec ...\"]
                                                 also tidy the memory every day at that time
                                                 on this machine's clock; no scheduler needed
+  lucid-dream serve --root <dir> --dream-at 03:00 --backup-to <folder>
+                                                after each dream, copy the whole memory into
+                                                that folder as one file (a synced or second
+                                                disk folder); restore with git clone
   lucid-dream serve --root <dir> --bind ADDR --only <agent>/<label>
                                                 a door by itself: accepts that one token only
   lucid-dream serve --root <dir> --stdio [--as <agent>]
-  lucid-dream dream --root <dir> [--dry-run]    consolidate the inbox and commit
+  lucid-dream dream --root <dir> [--dry-run] [--backup-to <folder>]
+                                                consolidate the inbox and commit
   lucid-dream webhook set <agent> --url URL --root <dir>
                                                 wake that agent when it gets a message;
                                                 its Authorization value is read from
@@ -79,6 +84,9 @@ On any device:
   lucid-dream setup --url URL [--plan]           connect Claude Code on this machine: adds
                                                 the hooks and the MCP server (token from
                                                 LUCID_TOKEN, or typed in); --plan only shows
+  lucid-dream setup --codex --url URL [--plan]   connect the Codex CLI instead: adds the MCP
+                                                server to its config and the memory rule to
+                                                its AGENTS.md (token from LUCID_TOKEN_CODEX)
   lucid-dream doctor [--root <dir>] [--url URL]  check this machine's connection, hooks and
                                                 version, and the store when given; changes
                                                 nothing
@@ -101,6 +109,7 @@ Environment:
   LUCID_BIND       listen address, instead of --bind (default 127.0.0.1:7878)
   LUCID_URL        server endpoint for hooks and import, e.g. http://my-pc:7878/mcp
   LUCID_TOKEN      this device's agent token, for hooks and import
+  LUCID_BACKUP_DIR folder for a backup after each dream, instead of --backup-to
   LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p).
                    Several, separated by ||, are tried in order until one succeeds,
                    e.g. \"claude || codex exec --sandbox workspace-write\"
@@ -327,6 +336,7 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
             "--doors",
             "--dream-at",
             "--dream-with",
+            "--backup-to",
         ],
         &["--stdio"],
     )?;
@@ -383,6 +393,10 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
     // starts, by timer or by an agent's request.
     if let Some(command) = args.option("--dream-with") {
         std::env::set_var("LUCID_DREAM_CMD", command);
+    }
+    // `--backup-to <folder>`: after each dream, copy the memory there.
+    if let Some(folder) = args.option("--backup-to") {
+        std::env::set_var(dream::BACKUP_ENV, folder);
     }
     // `--dream-at 03:00`: the server tidies the memory itself every day, so
     // no scheduler has to be set up.
@@ -563,8 +577,11 @@ fn serve_stdio(store: &Store, who: &str) -> std::io::Result<()> {
 }
 
 fn cmd_dream(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root"], &["--dry-run"])?;
+    let args = Args::parse(raw, &["--root", "--backup-to"], &["--dry-run"])?;
     args.store()?;
+    if let Some(folder) = args.option("--backup-to") {
+        std::env::set_var(dream::BACKUP_ENV, folder);
+    }
     // Hand git and the agent the path as given: a canonical Windows path
     // (\\?\C:\...) is one neither of them accepts as a working directory.
     let root = args.root()?;
@@ -702,11 +719,44 @@ fn cmd_doctor(raw: Vec<String>) -> ExitCode {
 
 /// Connect Claude Code on this machine to a memory server.
 fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--url", "--settings"], &["--plan"])?;
+    let args = Args::parse(
+        raw,
+        &["--url", "--settings", "--codex-home"],
+        &["--plan", "--codex"],
+    )?;
     let url = args
         .option("--url")
         .or_else(|| env("LUCID_URL"))
         .ok_or("no server; pass --url http://<pc-name>:7878/mcp")?;
+    // `--codex`: the Codex CLI instead of Claude Code. Its token stays in an
+    // environment variable that Codex reads; this only names the variable.
+    if args.switches.contains("--codex") {
+        let home = args
+            .option("--codex-home")
+            .or_else(|| env("CODEX_HOME"))
+            .map(PathBuf::from)
+            .or_else(|| {
+                let home = env("HOME").or_else(|| env("USERPROFILE"))?;
+                Some(PathBuf::from(home).join(".codex"))
+            })
+            .ok_or("no home folder; pass --codex-home")?;
+        setup::codex(&home, &url, args.switches.contains("--plan"))?;
+        match env(setup::CODEX_TOKEN_ENV) {
+            Some(token) => {
+                let client = Client::with(url.clone(), token, HOOK_TIMEOUT);
+                match client.call("who", serde_json::json!({})) {
+                    Ok(_) => println!("Server: reachable at {url}, Codex's token accepted"),
+                    Err(e) => println!("Server: {e}"),
+                }
+            }
+            None => println!(
+                "Next: put Codex's token (from `lucid-dream token add codex` on the memory's \
+                 machine) in the environment variable {} where Codex runs.",
+                setup::CODEX_TOKEN_ENV
+            ),
+        }
+        return Ok(());
+    }
     // The token never goes on the command line: from LUCID_TOKEN, or typed in.
     let token = match env("LUCID_TOKEN") {
         Some(token) => token,

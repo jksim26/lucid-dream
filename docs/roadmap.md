@@ -35,6 +35,9 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
   one session, several or all on request, and replies return to the asker
 - [x] **17. Dream without a scheduler** (added 2026-11-12): the server dreams daily with
   `--dream-at`, and any agent can start one with the `dream` tool
+- [x] **18. Deeper memory** (added 2026-11-12): full session records by hook, search in
+  two layers with several words, pages linked and given alternative words by dream,
+  optional backup after each dream, `setup --codex`
 
 Not done yet:
 
