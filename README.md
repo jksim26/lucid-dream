@@ -44,21 +44,22 @@ The same server carries messages. Any agent can send one to another, or to
 one particular session of it, and an idle session wakes up to read it.
 
 <p align="center">
-  <img src="docs/grok-bot.png" width="640" alt="Grok Bot's own window: it reports a note from Claude's session, proposes a reply, asks whether to send it, sends it, and confirms the reply has gone to Claude session 2.">
+  <img src="docs/grok-bot.png" width="720" alt="Grok Bot's own window: the user asks it to ask Claude session 2 whether the tests are passing; Grok Bot says it is asking, then reports that session 2 says 84 passed and 0 failed.">
 </p>
 
-That is Grok Bot's own window during a real exchange: a Claude Code session
-sent it a message, a webhook woke it, and it answered. (One word, a time
-zone, is covered.) Underneath, the same exchange looked like this:
+That is Grok Bot's own window, uncut and unedited apart from the crop. Grok
+Bot is a separate app from Grok; here it is asked something only a Claude
+Code session on another machine can answer. It sends the question to that
+session, which wakes, runs the tests and replies; a webhook wakes Grok Bot
+with the answer. The other direction, a Claude session starting the
+conversation, looks like this in the logs:
 
 <p align="center">
   <img src="docs/demo.svg" width="920" alt="A Claude Code session sends a message to Grok Bot; a webhook wakes Grok Bot, which reads the message and replies; the reply wakes the same Claude session 53 seconds after the first message.">
 </p>
 
-So you can ask Grok Bot on your phone to have the Claude session on your PC
-run the tests, and get the answer back there. A Claude session on the same
-machine is woken in about a third of a second; the round trip above is
-mostly Grok Bot working. `who` lists every agent and
+A Claude session is woken in about a third of a second; most of a round trip
+is the agents working. `who` lists every agent and
 session and which are listening:
 
 ```
