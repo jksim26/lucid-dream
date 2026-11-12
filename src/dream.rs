@@ -25,7 +25,206 @@ const CLAUDE_TOOLS: [&str; 7] = [
     "Bash(mkdir *)",
 ];
 
+/// Dream once, printing what happened. Used by `lucid-dream dream --dry-run`
+/// and the tests; everything else goes through `run_recorded`.
 pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
+    let summary = dream(root, dry_run)?;
+    if !summary.is_empty() {
+        println!("{summary}");
+    }
+    Ok(())
+}
+
+/// How a dream went, kept in `.lucid/dream-status.json` so that `doctor` and
+/// the `dream` tool can say when memory was last tidied and whether it worked.
+pub struct Status {
+    pub started: i64,
+    /// Zero while the dream is still running.
+    pub finished: i64,
+    pub ok: bool,
+    pub message: String,
+    /// What started it: "timer", "hand", or the agent that asked.
+    pub by: String,
+}
+
+/// A dream that has run this long has hung or its machine went down.
+const STALE_AFTER_SECS: i64 = 2 * 3600;
+
+fn status_file(root: &Path) -> std::path::PathBuf {
+    root.join(".lucid").join("dream-status.json")
+}
+
+fn lock_file(root: &Path) -> std::path::PathBuf {
+    root.join(".lucid").join("dream.lock")
+}
+
+pub fn status(root: &Path) -> Option<Status> {
+    let text = fs::read_to_string(status_file(root)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(Status {
+        started: v["started"].as_i64()?,
+        finished: v["finished"].as_i64().unwrap_or(0),
+        ok: v["ok"] == true,
+        message: v["message"].as_str().unwrap_or("").to_string(),
+        by: v["by"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+fn record(root: &Path, status: &Status) {
+    let text = serde_json::json!({
+        "started": status.started, "finished": status.finished, "ok": status.ok,
+        "message": status.message, "by": status.by,
+    });
+    let _ = fs::write(status_file(root), format!("{text}\n"));
+}
+
+/// When a dream that is running right now started, if one is.
+pub fn running_since(root: &Path) -> Option<i64> {
+    let started: i64 = fs::read_to_string(lock_file(root))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (crate::util::unix_now() - started < STALE_AFTER_SECS).then_some(started)
+}
+
+/// A path git and the agents accept as a working directory. Windows hands
+/// back `\\?\C:\...` for a canonical path, which neither does.
+fn plain(root: &Path) -> std::path::PathBuf {
+    match root.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC\\") => std::path::PathBuf::from(rest),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// Dream once, with nothing else dreaming at the same time, and record how
+/// it went. `by` says what started it.
+pub fn run_recorded(root: &Path, by: &str) -> Result<String, String> {
+    let root = &plain(root);
+    let now = crate::util::unix_now();
+    if let Some(since) = running_since(root) {
+        return Err(format!(
+            "a dream is already running (started {} min ago)",
+            (now - since) / 60
+        ));
+    }
+    let lock = lock_file(root);
+    if let Some(dir) = lock.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    // A stale lock, from a dream that never finished, is replaced.
+    let _ = fs::remove_file(&lock);
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+        .and_then(|mut f| f.write_all(now.to_string().as_bytes()))
+        .map_err(|e| format!("a dream is already starting ({e})"))?;
+    let mut status = Status {
+        started: now,
+        finished: 0,
+        ok: false,
+        message: String::new(),
+        by: by.to_string(),
+    };
+    record(root, &status);
+    let outcome = dream(root, false);
+    let _ = fs::remove_file(&lock);
+    status.finished = crate::util::unix_now();
+    status.ok = outcome.is_ok();
+    status.message = match &outcome {
+        Ok(summary) => summary.lines().next().unwrap_or("").to_string(),
+        Err(e) => e.clone(),
+    };
+    record(root, &status);
+    outcome
+}
+
+/// One line on when memory was last tidied, for people and agents.
+pub fn describe(root: &Path) -> String {
+    let now = crate::util::unix_now();
+    if let Some(since) = running_since(root) {
+        return format!(
+            "a dream is running now (started {} min ago)",
+            (now - since) / 60
+        );
+    }
+    match status(root) {
+        None => "no dream has been recorded yet".to_string(),
+        Some(s) if s.finished == 0 => "the last dream did not finish".to_string(),
+        Some(s) => {
+            let ago = match (now - s.finished) / 60 {
+                m if m < 90 => format!("{m} min ago"),
+                m if m < 48 * 60 => format!("{} hours ago", m / 60),
+                m => format!("{} days ago", m / 1440),
+            };
+            let how = if s.ok { "finished" } else { "FAILED" };
+            format!(
+                "the last dream {how} {ago}, started by {}: {}",
+                s.by, s.message
+            )
+        }
+    }
+}
+
+/// Start a dream without waiting for it; it takes minutes.
+pub fn start_in_background(root: &Path, by: &str) -> Result<(), String> {
+    if let Some(since) = running_since(root) {
+        return Err(format!(
+            "a dream is already running (started {} min ago)",
+            (crate::util::unix_now() - since) / 60
+        ));
+    }
+    let (root, by) = (root.to_path_buf(), by.to_string());
+    std::thread::spawn(move || match run_recorded(&root, &by) {
+        Ok(summary) => eprintln!("lucid-dream: dream started by {by}: {summary}"),
+        Err(e) => eprintln!("lucid-dream: dream started by {by} failed: {e}"),
+    });
+    Ok(())
+}
+
+/// Parse `HH:MM`, a time of day on this machine's clock.
+pub fn time_of_day(text: &str) -> Result<(u32, u32), String> {
+    let bad = || format!("bad time `{text}`; write it as HH:MM, e.g. 03:00");
+    let (h, m) = text.trim().split_once(':').ok_or_else(bad)?;
+    let (h, m): (u32, u32) = (h.parse().map_err(|_| bad())?, m.parse().map_err(|_| bad())?);
+    if h > 23 || m > 59 {
+        return Err(bad());
+    }
+    Ok((h, m))
+}
+
+/// True when today's dream is due: the time of day has passed and no dream
+/// has started since. So a machine that was off at that time dreams when it
+/// comes back, and a dream run by hand after it counts as today's.
+fn due(now: i64, todays_time: i64, last_started: Option<i64>) -> bool {
+    now >= todays_time && last_started.is_none_or(|last| last < todays_time)
+}
+
+/// Dream every day at `at`, local time, for as long as the server runs.
+pub fn timer(root: std::path::PathBuf, at: (u32, u32)) {
+    use chrono::{Local, TimeZone};
+    std::thread::spawn(move || loop {
+        let now = Local::now();
+        let todays_time = now
+            .date_naive()
+            .and_hms_opt(at.0, at.1, 0)
+            .and_then(|t| Local.from_local_datetime(&t).earliest())
+            .map(|t| t.timestamp());
+        let last = status(&root).map(|s| s.started);
+        if todays_time.is_some_and(|t| due(now.timestamp(), t, last))
+            && running_since(&root).is_none()
+        {
+            match run_recorded(&root, "timer") {
+                Ok(summary) => eprintln!("lucid-dream: nightly dream: {summary}"),
+                Err(e) => eprintln!("lucid-dream: nightly dream failed: {e}"),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    });
+}
+
+fn dream(root: &Path, dry_run: bool) -> Result<String, String> {
     git(root, &["rev-parse", "--git-dir"]).map_err(|_| {
         format!(
             "{} is not a git repository; create the store with `lucid-dream init`",
@@ -36,8 +235,7 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     let inbox = count_files(&root.join("inbox"));
     let dirty = !git(root, &["status", "--porcelain"])?.trim().is_empty();
     if inbox == 0 && !dirty {
-        println!("nothing to dream: the inbox is empty and no logs are new");
-        return Ok(());
+        return Ok("nothing to dream: the inbox is empty and no logs are new".into());
     }
 
     let attempts = commands(&today);
@@ -55,7 +253,7 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
                 flags.join(" ")
             );
         }
-        return Ok(());
+        return Ok(String::new());
     }
 
     if dirty {
@@ -93,8 +291,7 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     let restored = restore_deleted(root)?;
     let stat = git(root, &["diff", "--cached", "--shortstat"])?;
     if stat.trim().is_empty() {
-        println!("dream made no changes");
-        return Ok(());
+        return Ok("dream made no changes".into());
     }
     let mut message = format!("dream: {today}\n\n{}", stat.trim());
     if !restored.is_empty() {
@@ -118,11 +315,11 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
             restored.len()
         );
     }
-    println!(
-        "dream committed:{stat}review it with: git -C {} show --stat",
+    Ok(format!(
+        "dream committed:{}\nreview it with: git -C {} show --stat",
+        stat.trim_end(),
         root.display()
-    );
-    Ok(())
+    ))
 }
 
 /// One agent to try: its program, arguments, and what to feed its stdin.
@@ -204,10 +401,12 @@ fn run_agent(
             // The dream is not a working session: this tells our own hooks,
             // which the agent inherits from the user's settings, to stay out.
             .env(DREAMING_ENV, "1")
+            // An agent given its prompt as an argument gets no input: a
+            // server has no terminal for it to wait on.
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {
-                Stdio::inherit()
+                Stdio::null()
             })
             .spawn()
     };
@@ -413,6 +612,48 @@ mod tests {
             "note b\n"
         );
         assert_eq!(inbox_files(&store), ["late.md"]);
+    }
+
+    #[test]
+    fn todays_dream_is_due_once() {
+        // 03:00 today is t=1000.
+        assert!(!due(999, 1000, None));
+        assert!(due(1000, 1000, None));
+        assert!(due(5000, 1000, Some(400)));
+        // It ran at 03:00, or by hand afterwards: not again today.
+        assert!(!due(5000, 1000, Some(1000)));
+        assert!(!due(5000, 1000, Some(3000)));
+        assert_eq!(time_of_day("03:00").unwrap(), (3, 0));
+        assert_eq!(time_of_day(" 23:59").unwrap(), (23, 59));
+        for bad in ["3", "24:00", "03:60", "a:b", ""] {
+            assert!(time_of_day(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_dream_leaves_its_status_and_allows_one_at_a_time() {
+        let t = Temp::new();
+        let store = t.0.join("store");
+        init::run(&store).unwrap();
+        assert!(status(&store).is_none());
+        // Nothing to do still counts as a dream that ran and worked.
+        run_recorded(&store, "hand").unwrap();
+        let s = status(&store).unwrap();
+        assert!(s.ok && s.finished >= s.started && s.by == "hand");
+        assert!(s.message.starts_with("nothing to dream"));
+        assert!(describe(&store).contains("finished 0 min ago, started by hand"));
+
+        // While one runs, another is refused; a stale lock is not in the way.
+        fs::write(lock_file(&store), crate::util::unix_now().to_string()).unwrap();
+        assert!(run_recorded(&store, "timer")
+            .unwrap_err()
+            .contains("already running"));
+        assert!(start_in_background(&store, "grok").is_err());
+        fs::write(lock_file(&store), "1000").unwrap();
+        run_recorded(&store, "timer").unwrap();
+        assert_eq!(status(&store).unwrap().by, "timer");
+        assert!(!lock_file(&store).exists());
     }
 
     #[test]

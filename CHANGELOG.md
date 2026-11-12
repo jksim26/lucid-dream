@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 (2026-11-12)
+
+- `serve --dream-at 03:00` makes the server tidy the memory itself every
+  day, with no scheduler to set up; it catches up if the machine was off.
+  `--dream-with` chooses the agent.
+- A `dream` tool lets any agent start the dream now or ask how the last one
+  went, so a cloud routine can be the clock and you can still run it by hand.
+- Only one dream runs at a time. Each leaves a record, and `doctor` says when
+  the last one failed.
+- `quickstart` prints a server command with the nightly dream included.
+
 ## 0.7.0 (2026-11-12)
 
 - A message sent with no `session` now goes to exactly one session of that

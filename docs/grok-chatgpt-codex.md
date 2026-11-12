@@ -48,11 +48,13 @@ never post one.
 ## 3. Start the server
 
 ```bash
-lucid-dream serve --root ~/lucid-memory --doors grok=7882,chatgpt=7883
+lucid-dream serve --root ~/lucid-memory --doors grok=7882,chatgpt=7883 --dream-at 03:00 --dream-with "codex exec --sandbox workspace-write"
 ```
 
 Leave it running. This one process is the server for your own computer
-(port 7878) plus a "door" each for Grok and ChatGPT. A door accepts only its
+(port 7878) plus a "door" each for Grok and ChatGPT. It also tidies the
+memory every night at 03:00 using Codex (the "dream"); if the computer was
+off then, it does it when the server is next running. A door accepts only its
 own agent's token, so a leaked Grok address cannot be used as ChatGPT.
 
 To have it start by itself after a restart, add that command to your login
@@ -137,22 +139,21 @@ Things to know before you start:
   your Codex usage. Running it is counted separately.
 - **ChatGPT is not woken.** It reads its messages when you ask it to.
 
-## 7. Connect Codex and schedule the dream
+## 7. Try the dream, and connect Codex
 
-**Dream.** Tell lucid-dream to use Codex, then try one run:
-
-```bash
-export LUCID_DREAM_CMD="codex exec --sandbox workspace-write"
-```
+The server from step 3 dreams by itself every night. Try one now so you have
+seen what it does:
 
 ```bash
-lucid-dream dream --root ~/lucid-memory
+LUCID_DREAM_CMD="codex exec --sandbox workspace-write" lucid-dream dream --root ~/lucid-memory
 ```
 
 It merges the day's notes into pages, rebuilds the index and commits to the
 memory's own git history; `git -C ~/lucid-memory show --stat` shows what it
-did. Once you are happy with it, run that command nightly (cron, launchd or
-Task Scheduler) with `LUCID_DREAM_CMD` set.
+did, and `git revert` undoes it. It runs on your ChatGPT subscription.
+
+You can also ask any connected agent to do it: "use lucid-dream to tidy the
+memory now". And `lucid-dream doctor` says if the last dream failed.
 
 **Codex as a memory client** (optional). Follow
 [clients/codex](../clients/codex/README.md): three lines in
@@ -189,7 +190,8 @@ deletes the memory.
 
 ## Tried and not tried
 
-Tried: the install script on macOS, `quickstart`, one server with two doors,
+Tried: the install script on macOS, `quickstart`, one server with two doors
+and the nightly timer,
 Grok Bot as a connector with a webhook, the ChatGPT relay Site on a Plus
 account, Codex as a memory client and as the dream agent on macOS.
 

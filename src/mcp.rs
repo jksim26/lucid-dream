@@ -202,6 +202,17 @@ fn tools() -> Value {
             "description": "List the user's agents on this server and their sessions: which are listening right now, which were recently active, and which are woken by a webhook. Use it before `send` to choose who, and which session, to address.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
+        },
+        {
+            "name": "dream",
+            "description": "Tidy the shared memory now: start the dream job on the machine that holds the memory, which merges the inbox notes into pages and rebuilds the index. It normally runs by itself every night, so use this only when the user asks for it or a scheduled routine of theirs calls for it. It takes a few minutes and runs in the background: this returns at once, and calling it again with `status` true says how it went. One dream runs at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "boolean", "description": "Only report when memory was last tidied and whether that worked; start nothing." }
+                }
+            },
+            "annotations": add_only,
         }
     ])
 }
@@ -456,6 +467,21 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
             at: unix_now(),
         }),
         "who" => Ok(who_is_around(store, who)),
+        "dream" => {
+            let root = store.root();
+            if args.get("status").and_then(Value::as_bool).unwrap_or(false) {
+                Ok(crate::dream::describe(root))
+            } else {
+                match crate::dream::start_in_background(root, who) {
+                    Ok(()) => Ok(format!(
+                        "dream started. It takes a few minutes; call `dream` with `status` true \
+                         to see how it went. Before this one, {}.",
+                        crate::dream::describe(root)
+                    )),
+                    Err(e) => Err(StoreError::Invalid(e)),
+                }
+            }
+        }
         _ => return Err((-32602, format!("unknown tool: {name}"))),
     };
 
@@ -517,7 +543,7 @@ mod tests {
         let t = Temp::new();
         let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
         let reply = handle(&t.store(), "local", &msg).unwrap();
-        assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), 11);
     }
 
     #[test]

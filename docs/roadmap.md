@@ -33,10 +33,13 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
   doors, Codex as a memory client, and a guide for Grok + ChatGPT + Codex users
 - [x] **16. One session per message** (added 2026-11-12): an unaddressed message goes to
   one session, several or all on request, and replies return to the asker
+- [x] **17. Dream without a scheduler** (added 2026-11-12): the server dreams daily with
+  `--dream-at`, and any agent can start one with the `dream` tool
 
 Not done yet:
 
-- [ ] Schedule the nightly dream (it has only been run by hand)
+- [ ] `service install`: start the server at login on Windows, macOS and Linux
+
 - [ ] Walk the Grok + ChatGPT + Codex guide from scratch on Windows and Linux
 - [ ] Try `install.ps1` and `setup` on Windows from scratch
 - [ ] Indexed full-text search, once scanning files gets slow

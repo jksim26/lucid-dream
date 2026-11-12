@@ -49,6 +49,9 @@ On the machine that holds the memory:
   lucid-dream serve --root <dir> --doors grok=7882,chatgpt=7883
                                                 also open a door per cloud agent, each on its
                                                 own local port and accepting only that token
+  lucid-dream serve --root <dir> --dream-at 03:00 [--dream-with \"codex exec ...\"]
+                                                also tidy the memory every day at that time
+                                                on this machine's clock; no scheduler needed
   lucid-dream serve --root <dir> --bind ADDR --only <agent>/<label>
                                                 a door by itself: accepts that one token only
   lucid-dream serve --root <dir> --stdio [--as <agent>]
@@ -239,7 +242,15 @@ fn cmd_token(raw: Vec<String>) -> Result<(), String> {
 fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(
         raw,
-        &["--root", "--bind", "--as", "--only", "--doors"],
+        &[
+            "--root",
+            "--bind",
+            "--as",
+            "--only",
+            "--doors",
+            "--dream-at",
+            "--dream-with",
+        ],
         &["--stdio"],
     )?;
     let store = args.store()?;
@@ -290,6 +301,21 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
                 only: Some((agent, label)),
             },
         ));
+    }
+    // `--dream-with "codex exec ..."`: the agent for every dream this server
+    // starts, by timer or by an agent's request.
+    if let Some(command) = args.option("--dream-with") {
+        std::env::set_var("LUCID_DREAM_CMD", command);
+    }
+    // `--dream-at 03:00`: the server tidies the memory itself every day, so
+    // no scheduler has to be set up.
+    if let Some(at) = args.option("--dream-at") {
+        let at = dream::time_of_day(&at)?;
+        eprintln!(
+            "lucid-dream: dreaming every day at {:02}:{:02}, this machine's time",
+            at.0, at.1
+        );
+        dream::timer(root.clone(), at);
     }
     http::serve_all(listeners)
 }
@@ -370,7 +396,15 @@ fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
             .collect();
         serve.push_str(&format!(" --doors {}", list.join(",")));
     }
-    println!("\nNext, start the server and leave it running:\n  {serve}");
+    serve.push_str(" --dream-at 03:00");
+    let has = |name: &str| agents.iter().any(|a| a == name);
+    if has("codex") && !has("claude") {
+        serve.push_str(" --dream-with \"codex exec --sandbox workspace-write\"");
+    }
+    println!(
+        "\nNext, start the server and leave it running. It also tidies the memory every \
+         night at 03:00:\n  {serve}"
+    );
     if !doors.is_empty() {
         println!(
             "\nGrok and ChatGPT call from the internet, so each needs a public HTTPS address \
@@ -416,7 +450,12 @@ fn cmd_dream(raw: Vec<String>) -> Result<(), String> {
     args.store()?;
     // Hand git and the agent the path as given: a canonical Windows path
     // (\\?\C:\...) is one neither of them accepts as a working directory.
-    dream::run(&args.root()?, args.switches.contains("--dry-run"))
+    let root = args.root()?;
+    if args.switches.contains("--dry-run") {
+        return dream::run(&root, true);
+    }
+    println!("{}", dream::run_recorded(&root, "hand")?);
+    Ok(())
 }
 
 fn cmd_import(raw: Vec<String>) -> Result<(), String> {

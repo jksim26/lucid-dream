@@ -434,6 +434,16 @@ pub fn store(root: &Path) -> Vec<Check> {
         }
     });
 
+    // The record a dream leaves says more than git does: a failed dream
+    // makes no commit.
+    if let Some(last) = crate::dream::status(root) {
+        if last.finished > 0 && !last.ok {
+            checks.push(check(
+                Level::Warn,
+                format!("the last dream failed: {}", last.message),
+            ));
+        }
+    }
     let trusted = crate::trust::load(&crate::trust::path(root));
     if !trusted.is_empty() {
         checks.push(check(

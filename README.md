@@ -199,7 +199,7 @@ over stdio instead.
 - Grok: [clients/grok](clients/grok)
 - ChatGPT, through a Site it hosts: [clients/chatgpt](clients/chatgpt)
 
-The server offers ten tools:
+The server offers eleven tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -210,6 +210,7 @@ The server offers ten tools:
 | `send` | Leaves a message for another agent, or for `all`; `session` narrows it to one session by number |
 | `check_in` | Announces a session and returns its number |
 | `who` | Lists the agents and their sessions, and which are listening now |
+| `dream` | Starts the dream job now, or reports how the last one went |
 | `messages` | Returns messages the caller has not seen yet |
 
 Reads refuse absolute paths, `..`, hidden files and symlinks that leave the
@@ -383,12 +384,22 @@ an agent with [this prompt](src/dream_prompt.md), and commits the result
   and says so in the commit message.
 - If the agent fails, tracked files are restored and nothing is committed.
 
-Run it by hand and read the diffs for the first week. Then schedule it, on
-Windows with Task Scheduler:
+Run it by hand and read the diffs for the first week. Then let the server do
+it: started with `--dream-at`, it dreams every day at that time on the
+machine's own clock, with no scheduler to set up.
 
 ```bash
-schtasks /Create /SC DAILY /ST 03:00 /TN lucid-dream /TR "lucid-dream dream --root C:\path\to\memory"
+lucid-dream serve --root <memory dir> --dream-at 03:00
 ```
+
+- If the machine was off or asleep at that time, it dreams when the server is
+  next running. A dream you run by hand after that time counts as the day's.
+- `--dream-with "codex exec --sandbox workspace-write"` chooses the agent for
+  the server's dreams, the same as `LUCID_DREAM_CMD`.
+- Any agent can start one with the `dream` tool ("tidy the memory now"), and
+  ask how the last one went with `status`. So a cloud routine of Grok's or
+  Claude's can be the clock instead, and you can always run it by hand.
+- Only one dream runs at a time, whoever started it.
 
 ## Import old memory
 

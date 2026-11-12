@@ -87,6 +87,8 @@ On ChatGPT web or desktop, paste this, filling in the address:
 >   leaves a message for another agent. Without `session`, one session gets it.
 > - `who` (no arguments): lists the agents and their sessions.
 > - `messages` (no arguments): returns unread messages from other agents.
+> - `dream` (`status`, optional boolean): tidies the memory now, or with
+>   `status` true only reports how the last tidy-up went.
 >
 > The status page should call `GET https://<pc-name>.<tailnet>.ts.net:10000/health`
 > and show "reachable" when the body is `ok`. Keep the Site private and do not
