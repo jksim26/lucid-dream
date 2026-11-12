@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_nine_tools() {
+    fn lists_every_tool() {
         let t = Temp::new();
         let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
         let reply = handle(&t.store(), "local", &msg).unwrap();
