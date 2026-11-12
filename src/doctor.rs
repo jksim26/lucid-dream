@@ -271,7 +271,7 @@ fn waiters() -> Check {
         );
     };
     let dir = Path::new(&home).join(".lucid-dream").join("wait");
-    let listening = fs::read_dir(dir)
+    let versions: Vec<Option<String>> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -283,15 +283,38 @@ fn waiters() -> Check {
                 .and_then(|at| at.elapsed().ok())
                 .is_some_and(|age| age < Duration::from_secs(90))
         })
+        // Each file names its waiter as "<pid> <version>"; before 0.5.1, "<pid>".
+        .map(|e| {
+            fs::read_to_string(e.path())
+                .ok()
+                .and_then(|text| text.split_whitespace().nth(1).map(str::to_string))
+        })
+        .collect();
+    waiting(&versions)
+}
+
+/// The report for the waiters found, each with the version it runs if known.
+fn waiting(versions: &[Option<String>]) -> Check {
+    let old = versions
+        .iter()
+        .filter(|v| v.as_deref() != Some(upgrade::CURRENT))
         .count();
-    match listening {
-        0 => check(
+    match (versions.len(), old) {
+        (0, _) => check(
             Level::Warn,
             "no session on this machine is waiting for messages right now",
         ),
-        n => check(
+        (n, 0) => check(
             Level::Ok,
             format!("{n} session(s) on this machine are waiting for messages"),
+        ),
+        (n, old) => check(
+            Level::Warn,
+            format!(
+                "{n} session(s) are waiting for messages, {old} of them with an older version \
+                 of lucid-dream; each switches to {} after its next turn",
+                upgrade::CURRENT
+            ),
         ),
     }
 }
@@ -437,6 +460,19 @@ mod tests {
         let partial = hooks(&settings, &current);
         assert_eq!(partial[0].level, Level::Warn);
         assert!(partial[0].text.contains("SessionEnd: session-end"));
+    }
+
+    #[test]
+    fn says_when_a_waiter_runs_an_older_version() {
+        let current = Some(upgrade::CURRENT.to_string());
+        assert_eq!(waiting(&[]).level, Level::Warn);
+        assert_eq!(
+            waiting(&[current.clone(), current.clone()]).level,
+            Level::Ok
+        );
+        let mixed = waiting(&[current, None, Some("0.4.0".into())]);
+        assert_eq!(mixed.level, Level::Warn);
+        assert!(mixed.text.contains("3 session(s)") && mixed.text.contains("2 of them"));
     }
 
     #[test]

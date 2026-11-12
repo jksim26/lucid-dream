@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 (2026-11-12)
+
+- Dream archives the inbox notes itself when the agent could not, so it works
+  with agents whose sandbox refuses `git mv`. Tried with the Codex CLI:
+  `LUCID_DREAM_CMD="codex exec --sandbox workspace-write"`.
+- A waiting hook left running across an upgrade is replaced by the new
+  version after the session's next turn; `doctor` says when one is still old.
+- `upgrade` on Windows no longer fails when an old copy is still running.
+
 ## 0.5.0 (2026-11-12)
 
 - `lucid-dream doctor` checks the version, hooks, token, server and (with

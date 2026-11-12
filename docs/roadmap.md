@@ -33,7 +33,6 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
 Not done yet:
 
 - [ ] Schedule the nightly dream (it has only been run by hand)
-- [ ] Try dream with an agent other than Claude (Codex first)
 - [ ] Connect Codex with its own token
 - [ ] Try `install.ps1` and `setup` on Windows from scratch
 - [ ] Handoffs: a message with one owner, claimed exactly once

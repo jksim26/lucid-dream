@@ -94,9 +94,18 @@ fn swap(exe: &Path, new: &Path) -> std::io::Result<()> {
         fs::set_permissions(new, fs::Permissions::from_mode(0o755))?;
     }
     if cfg!(windows) {
-        let old = exe.with_extension("old.exe");
-        let _ = fs::remove_file(&old);
-        fs::rename(exe, &old)?;
+        // An earlier old copy may still be running (a waiting hook started
+        // before the last upgrade) and so cannot be removed: use the next name.
+        let moved = (0..20).find_map(|n| {
+            let old = exe.with_extension(format!("old{n}.exe"));
+            let _ = fs::remove_file(&old);
+            fs::rename(exe, &old).ok().map(|_| old)
+        });
+        let Some(old) = moved else {
+            return Err(std::io::Error::other(
+                "could not move the running program aside",
+            ));
+        };
         if let Err(e) = fs::rename(new, exe) {
             let _ = fs::rename(&old, exe);
             return Err(e);

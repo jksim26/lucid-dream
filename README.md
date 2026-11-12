@@ -336,8 +336,11 @@ an agent with [this prompt](src/dream_prompt.md), and commits the result
   `LUCID_DREAM_CMD` to use another one; the prompt is appended.
 - List several agents with `||` and dream tries them in order, so a night when
   one is out of quota still gets its dream:
-  `LUCID_DREAM_CMD="claude || codex exec --full-auto"`. A bare `claude` keeps
-  the built-in tool limits. Only Claude has been tried so far.
+  `LUCID_DREAM_CMD="claude || codex exec --sandbox workspace-write"`. A bare
+  `claude` keeps the built-in tool limits. Tried with Claude Code and with
+  the Codex CLI (which runs on a ChatGPT subscription).
+- Inbox notes the agent leaves behind are archived by the program, so an
+  agent whose sandbox refuses `git mv` still empties the inbox.
 - If the agent deletes a file instead of archiving it, dream puts the file back
   and says so in the commit message.
 - If the agent fails, tracked files are restored and nothing is committed.

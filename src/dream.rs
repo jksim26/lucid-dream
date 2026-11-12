@@ -72,7 +72,15 @@ pub fn run(root: &Path, dry_run: bool) -> Result<(), String> {
     }
 
     println!("dreaming over {inbox} inbox notes...");
+    let noted = inbox_files(root);
     first_success(&attempts, root)?;
+    let archived = archive_inbox(root, &noted)?;
+    if !archived.is_empty() {
+        println!(
+            "archived {} inbox note(s) the agent left behind",
+            archived.len()
+        );
+    }
 
     git(root, &["add", "-A"])?;
     let restored = restore_deleted(root)?;
@@ -115,7 +123,7 @@ type Attempt = (String, Vec<String>, Option<String>);
 
 /// The agents to try, in order. The default is Claude alone. LUCID_DREAM_CMD
 /// replaces it, and may list several commands separated by `||`; the next is
-/// tried when one fails, e.g. `claude || codex exec --full-auto`.
+/// tried when one fails, e.g. `claude || codex exec --sandbox workspace-write`.
 fn commands(today: &str) -> Vec<Attempt> {
     let custom = std::env::var("LUCID_DREAM_CMD").unwrap_or_default();
     attempts(&custom, today)
@@ -209,6 +217,40 @@ fn run_agent(
     child.wait()
 }
 
+/// Names of the notes directly in `inbox/`.
+fn inbox_files(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(root.join("inbox"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Move the notes the dream was given out of the inbox, unchanged, if the
+/// agent did not: some agents run in a sandbox that refuses `git mv`, and a
+/// note left behind would be dreamt over again every night. Notes that
+/// arrived while dreaming are not in `noted` and stay for next time.
+fn archive_inbox(root: &Path, noted: &[String]) -> Result<Vec<String>, String> {
+    let (inbox, archive) = (root.join("inbox"), root.join("archive").join("inbox"));
+    let mut moved = Vec::new();
+    for name in noted {
+        let (from, to) = (inbox.join(name), archive.join(name));
+        if !from.is_file() || to.exists() {
+            continue;
+        }
+        fs::create_dir_all(&archive)
+            .and_then(|_| fs::rename(&from, &to))
+            .map_err(|e| format!("cannot archive inbox/{name}: {e}"))?;
+        moved.push(name.clone());
+    }
+    Ok(moved)
+}
+
 /// Nothing is hard-deleted: any staged deletion that is not a move is undone.
 fn restore_deleted(root: &Path) -> Result<Vec<String>, String> {
     let staged = git(root, &["diff", "--cached", "--name-status", "-M", "-z"])?;
@@ -289,13 +331,13 @@ mod tests {
 
     #[test]
     fn a_list_of_agents_is_tried_in_order() {
-        let list = attempts("claude || codex exec --full-auto ||", "2026-11-11");
+        let list = attempts("claude || codex exec -s workspace-write ||", "2026-11-11");
         assert_eq!(list.len(), 2);
         // The bare name keeps Claude's allowlist and stdin prompt.
         assert!(list[0].1.contains(&"--allowedTools".to_string()) && list[0].2.is_some());
         assert_eq!(list[1].0, "codex");
-        assert_eq!(list[1].1[..2], ["exec", "--full-auto"]);
-        assert!(list[1].1[2].starts_with("Today is 2026-11-11.") && list[1].2.is_none());
+        assert_eq!(list[1].1[..3], ["exec", "-s", "workspace-write"]);
+        assert!(list[1].1[3].starts_with("Today is 2026-11-11.") && list[1].2.is_none());
     }
 
     #[cfg(unix)]
@@ -341,6 +383,29 @@ mod tests {
             fs::read_to_string(store.join("notes/keep.md")).unwrap(),
             "before\n"
         );
+    }
+
+    #[test]
+    fn notes_the_agent_left_in_the_inbox_are_archived() {
+        let t = Temp::new();
+        let store = t.0.join("store");
+        init::run(&store).unwrap();
+        fs::write(store.join("inbox/a.md"), "note a\n").unwrap();
+        fs::write(store.join("inbox/b.md"), "note b\n").unwrap();
+        let noted = inbox_files(&store);
+        assert_eq!(noted, ["a.md", "b.md"]);
+
+        // The agent archived one itself; a third note arrived while it worked.
+        fs::create_dir_all(store.join("archive/inbox")).unwrap();
+        fs::rename(store.join("inbox/a.md"), store.join("archive/inbox/a.md")).unwrap();
+        fs::write(store.join("inbox/late.md"), "late\n").unwrap();
+
+        assert_eq!(archive_inbox(&store, &noted).unwrap(), ["b.md"]);
+        assert_eq!(
+            fs::read_to_string(store.join("archive/inbox/b.md")).unwrap(),
+            "note b\n"
+        );
+        assert_eq!(inbox_files(&store), ["late.md"]);
     }
 
     #[test]

@@ -271,10 +271,16 @@ pub fn wait(client: std::sync::Arc<Client>, input: &str, poll: Duration) -> Resu
             .and_then(|at| at.elapsed().ok())
             .is_some_and(|age| age < poll * 2 + Duration::from_secs(10))
     };
-    if fresh(&alive) {
+    // The file names its waiter as "<pid> <version>". A waiter from another
+    // version (left running across an upgrade) is replaced: it sees that the
+    // file no longer names it and stops.
+    let version = env!("CARGO_PKG_VERSION");
+    let same_version = fs::read_to_string(&alive)
+        .is_ok_and(|text| text.split_whitespace().nth(1) == Some(version));
+    if fresh(&alive) && same_version {
         return Ok(());
     }
-    let me = std::process::id().to_string();
+    let me = format!("{} {version}", std::process::id());
     fs::write(&alive, &me).map_err(|e| e.to_string())?;
 
     // Messages waiting when the session began were shown by the SessionStart

@@ -14,4 +14,4 @@
    hooks, so this rule is what makes it load the index and log its sessions.
 
 To let Codex run the nightly dream instead of Claude, set
-`LUCID_DREAM_CMD="codex exec --full-auto"` for the dream job.
+`LUCID_DREAM_CMD="codex exec --sandbox workspace-write"` for the dream job.

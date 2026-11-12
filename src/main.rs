@@ -86,7 +86,7 @@ Environment:
   LUCID_TOKEN      this device's agent token, for hooks and import
   LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p).
                    Several, separated by ||, are tried in order until one succeeds,
-                   e.g. \"claude || codex exec --full-auto\"
+                   e.g. \"claude || codex exec --sandbox workspace-write\"
 
 lucid-dream --version prints the installed version.
 ";
