@@ -44,11 +44,13 @@ The same server carries messages. Any agent can send one to another, or to
 one particular session of it, and an idle session wakes up to read it.
 
 <p align="center">
-  <img src="docs/demo.svg" width="920" alt="One agent sends a message to Claude session 1; the idle session is woken about a quarter of a second later with the message.">
+  <img src="docs/demo.svg" width="920" alt="A Claude Code session sends a message to Grok Bot; a webhook wakes Grok Bot, which reads the message and replies; the reply wakes the same Claude session 53 seconds after the first message.">
 </p>
 
-So you can ask Grok on your phone to have the Claude session on your PC run
-the tests, and get the answer back in Grok. `who` lists every agent and
+So you can ask Grok Bot on your phone to have the Claude session on your PC
+run the tests, and get the answer back there. A Claude session on the same
+machine is woken in about a third of a second; the round trip above is
+mostly Grok Bot working. `who` lists every agent and
 session and which are listening:
 
 ```
@@ -70,7 +72,7 @@ the others.
 | Agent | Memory | Sends | Woken when a message arrives |
 | --- | --- | --- | --- |
 | Claude Code, terminal and desktop app | yes | yes | yes, by hook |
-| Grok, through its remote MCP support | yes | yes | yes, by webhook |
+| Grok Bot (a separate app from Grok), through a connector | yes | yes | yes, by webhook |
 | Claude app on phone and web | yes | yes | no, reads on request |
 | ChatGPT, through a Site it hosts | yes | yes | no, reads on request |
 | Codex CLI | yes | yes | no, reads at session start |
@@ -313,6 +315,35 @@ lucid-dream serve --root <memory dir> --bind 127.0.0.1:7881 --only claude/phone
 
 Never point a tunnel at the main listener. A door never admits a caller without
 its token, and a device token that leaks does not open any door.
+
+### Pairing: an agent fetches its own token
+
+Copying a long-lived token into a chat app by hand is the fiddly part of
+setup, so a cloud agent can collect its own:
+
+```bash
+lucid-dream brief grok --root <memory dir>
+```
+
+```bash
+lucid-dream brief chatgpt --root <memory dir>
+```
+
+Each prints a block to paste into that agent. It holds the agent's public
+address and a one-time pairing code, and tells the agent to exchange the
+code for its token at `/pair` and connect itself. You never see the token.
+
+- A code works once, for 60 minutes, and only at that agent's own door.
+- Five wrong guesses cancel every code that is waiting.
+- Using a code replaces that agent's token, so pairing again is also how
+  you rotate it.
+- `lucid-dream pair <agent>` prints just the code, for any other agent.
+
+The address comes from Tailscale when it is installed; otherwise pass
+`--host <public name>`. `quickstart --tunnels` opens the two Tailscale
+tunnels for you. Not yet tried with the real Grok Bot or ChatGPT: whether
+each can set up its own connector from the block is unconfirmed, and
+`token add` with a manual paste remains the fallback.
 
 ## Messages between agents
 

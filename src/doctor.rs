@@ -444,6 +444,12 @@ pub fn store(root: &Path) -> Vec<Check> {
             ));
         }
     }
+    for (agent, label, minutes) in crate::pair::waiting(root) {
+        checks.push(check(
+            Level::Ok,
+            format!("a pairing code for {agent}/{label} is waiting ({minutes} min left)"),
+        ));
+    }
     let trusted = crate::trust::load(&crate::trust::path(root));
     if !trusted.is_empty() {
         checks.push(check(

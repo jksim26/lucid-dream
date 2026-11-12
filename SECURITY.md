@@ -28,6 +28,15 @@ open a public issue for a vulnerability.
   are sent. A webhook's `Authorization` value is read from an environment
   variable and stored outside git.
 
+- **Pairing.** `/pair` is the one thing a caller without a token may use: it
+  exchanges a one-time code for the token of the agent the code was made
+  for. Codes are 75 bits, stored as hashes, expire after 60 minutes, work
+  once, and at a door only for that door's agent. Five wrong guesses cancel
+  every waiting code, and a refusal never says why. A code is made only by
+  someone with file access to the store.
+- **Dreams on request.** Any agent with a token can start a dream through
+  the `dream` tool, at most once every 30 minutes and one at a time. A dream
+  rewrites pages but only inside the store, and each is one git commit.
 - **Trusted messengers.** `trust add <agent>` is the user's own decision to
   let that agent's requests count as theirs for routine actions. It can only
   be set with file access to the store, and the mark is made by the server.

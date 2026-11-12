@@ -1,5 +1,6 @@
 //! lucid-dream: one shared memory that every agent reads and dream tidies.
 
+mod brief;
 mod channel;
 mod client;
 mod doctor;
@@ -9,6 +10,7 @@ mod http;
 mod import;
 mod init;
 mod mcp;
+mod pair;
 mod setup;
 mod store;
 mod tokens;
@@ -43,6 +45,12 @@ On the machine that holds the memory:
                                                 and print the commands to run next
   lucid-dream init <dir>                        create a memory store (folders + git)
   lucid-dream token add <agent> [--label L] --root <dir>     issue a token (shown once)
+  lucid-dream pair <agent> [--label L] [--minutes N] --root <dir>
+                                                print a one-time code the agent exchanges for
+                                                its own token at /pair, so you never copy one
+  lucid-dream brief grok|chatgpt --root <dir> [--host NAME]
+                                                print a block to paste into that agent: its
+                                                address and a fresh pairing code, no token
   lucid-dream token remove <agent> [--label L] --root <dir>  revoke a token
   lucid-dream token list --root <dir>           list tokens as agent/label
   lucid-dream serve --root <dir> [--bind ADDR]  serve MCP over HTTP at /mcp
@@ -124,6 +132,8 @@ fn main() -> ExitCode {
         "init" => cmd_init(raw),
         "quickstart" => cmd_quickstart(raw),
         "token" => cmd_token(raw),
+        "pair" => cmd_pair(raw),
+        "brief" => cmd_brief(raw),
         "serve" => cmd_serve(raw),
         "dream" => cmd_dream(raw),
         "import" => cmd_import(raw),
@@ -239,6 +249,73 @@ fn cmd_token(raw: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// Make a one-time code that an agent exchanges for its own token.
+fn cmd_pair(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root", "--label", "--minutes"], &[])?;
+    let store = args.store()?;
+    let [agent] = args.words.as_slice() else {
+        return Err(
+            "usage: lucid-dream pair <agent> [--label L] [--minutes N] --root <dir>".into(),
+        );
+    };
+    let label = args
+        .option("--label")
+        .unwrap_or_else(|| tokens::DEFAULT_LABEL.to_string());
+    let minutes = match args.option("--minutes") {
+        Some(m) => m.parse::<i64>().map_err(|_| "bad --minutes".to_string())?,
+        None => pair::DEFAULT_MINUTES,
+    };
+    let code = pair::create(store.root(), agent, &label, minutes)?;
+    eprintln!(
+        "pairing code for {agent}/{label} (works once, for {minutes} minutes; it replaces that \
+         agent's current token when used):"
+    );
+    println!("{code}");
+    eprintln!(
+        "The agent gets its token with a GET of <its address>/pair/{code}, or a POST of \
+         {{\"code\": \"{code}\"}} to <its address>/pair."
+    );
+    Ok(())
+}
+
+/// The public address of an agent's door: `https://<host>:<port>`.
+fn door_address(agent: &str, host: Option<String>) -> Result<String, String> {
+    let (_, _, public) = DOORS
+        .iter()
+        .find(|(name, _, _)| *name == agent)
+        .ok_or("briefs exist for grok and chatgpt; connect other agents with `setup`")?;
+    let host = host.or_else(brief::tailscale_host).ok_or(
+        "cannot tell this machine's public name; pass --host <name>, e.g. \
+         my-pc.my-tailnet.ts.net",
+    )?;
+    Ok(format!("https://{host}:{public}"))
+}
+
+/// Print what to paste into a cloud agent so it connects itself.
+fn cmd_brief(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root", "--host", "--minutes"], &[])?;
+    let store = args.store()?;
+    let [agent] = args.words.as_slice() else {
+        return Err("usage: lucid-dream brief grok|chatgpt --root <dir> [--host NAME]".into());
+    };
+    let address = door_address(agent, args.option("--host"))?;
+    let minutes = match args.option("--minutes") {
+        Some(m) => m.parse::<i64>().map_err(|_| "bad --minutes".to_string())?,
+        None => pair::DEFAULT_MINUTES,
+    };
+    let code = pair::create(store.root(), agent, tokens::DEFAULT_LABEL, minutes)?;
+    let text = match agent.as_str() {
+        "grok" => brief::grok(&address, &code),
+        _ => brief::chatgpt(&address, &code),
+    };
+    eprintln!(
+        "Paste everything below into {agent}. Its code works once, for {minutes} minutes, and \
+         replaces that agent's current token when used. The server must be running.\n"
+    );
+    print!("{text}");
+    Ok(())
+}
+
 fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(
         raw,
@@ -348,7 +425,7 @@ const DOORS: [(&str, u16, u16); 2] = [("grok", 7882, 8443), ("chatgpt", 7883, 10
 /// Everything the machine that holds the memory needs, in one step: the
 /// store, a token per agent, and the commands to run next.
 fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--agents"], &[])?;
+    let args = Args::parse(raw, &["--agents"], &["--tunnels"])?;
     let [dir] = args.words.as_slice() else {
         return Err("usage: lucid-dream quickstart <dir> --agents grok,chatgpt,codex".into());
     };
@@ -372,8 +449,12 @@ fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
 
     let file = tokens::path(&root);
     let have = Tokens::load(&file).map_err(|e| e.to_string())?;
-    println!("\nTokens. Each is shown once; give it only to that agent:");
-    for agent in &agents {
+    let cloud = |agent: &str| DOORS.iter().any(|(name, _, _)| *name == agent);
+    let local: Vec<&String> = agents.iter().filter(|a| !cloud(a)).collect();
+    if !local.is_empty() {
+        println!("\nTokens. Each is shown once; give it only to that agent:");
+    }
+    for agent in local {
         if have.has(agent, tokens::DEFAULT_LABEL) {
             println!(
                 "  {agent}: already has one (make another with `token add {agent} --label <name>`)"
@@ -408,18 +489,54 @@ fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
     if !doors.is_empty() {
         println!(
             "\nGrok and ChatGPT call from the internet, so each needs a public HTTPS address \
-             that leads only to its own door. With Tailscale installed:"
+             that leads only to its own door."
         );
-        for (agent, port, public) in &doors {
-            println!("  tailscale funnel --bg --https={public} {port}     # {agent}");
+        let host = brief::tailscale_host();
+        if args.switches.contains("--tunnels") {
+            for (agent, port, public) in &doors {
+                let done = std::process::Command::new("tailscale")
+                    .args([
+                        "funnel",
+                        "--bg",
+                        &format!("--https={public}"),
+                        &port.to_string(),
+                    ])
+                    .output();
+                match done {
+                    Ok(out) if out.status.success() => {
+                        println!("  tunnel for {agent}: open on public port {public}")
+                    }
+                    Ok(out) => println!(
+                        "  tunnel for {agent}: Tailscale refused: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    Err(_) => println!(
+                        "  tunnel for {agent}: `tailscale` is not installed or not on the PATH"
+                    ),
+                }
+            }
+        } else {
+            println!(
+                "With Tailscale installed (or run this again with --tunnels to do it for you):"
+            );
+            for (agent, port, public) in &doors {
+                println!("  tailscale funnel --bg --https={public} {port}     # {agent}");
+            }
+        }
+        let name = host.unwrap_or_else(|| "<this-machine>.<tailnet>.ts.net".to_string());
+        for (agent, _, public) in &doors {
+            println!("  {agent}'s address: https://{name}:{public}/mcp");
         }
         println!(
-            "Their addresses are then https://<this-machine>.<tailnet>.ts.net:<port>/mcp, with \
-             the ports above."
+            "\nOnce the server is running, connect each one by pasting a ready-made block \
+             into it. The block lets the agent fetch its own token, so you never copy one:"
         );
+        for (agent, _, _) in &doors {
+            println!("  lucid-dream brief {agent} --root {dir}");
+        }
     }
     println!(
-        "\nThen connect each agent: https://github.com/jksim26/lucid-dream#connect-the-agents\n\
+        "\nGuides for each agent: https://github.com/jksim26/lucid-dream#connect-the-agents\n\
          Check everything with: lucid-dream doctor --root {dir}"
     );
     Ok(())

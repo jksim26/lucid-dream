@@ -40,10 +40,13 @@ pub fn serve_all(listeners: Vec<(SocketAddr, App)>) -> Result<(), String> {
     for (addr, app) in listeners {
         let tokens = Tokens::load(&app.tokens).map_err(|e| format!("cannot read tokens: {e}"))?;
         match &app.only {
+            // A door may open before its agent has a token: it refuses
+            // everyone until the agent pairs.
             Some((agent, label)) if !tokens.has(agent, label) => {
-                return Err(format!(
-                    "no token {agent}/{label}; issue it with `lucid-dream token add {agent} --label {label}`"
-                ));
+                eprintln!(
+                    "lucid-dream: the door for {agent}/{label} has no token yet; connect that \
+                     agent with `lucid-dream brief {agent}` or `lucid-dream pair {agent}`"
+                );
             }
             None if !app.loopback && tokens.is_empty() => {
                 return Err(format!(
@@ -67,6 +70,8 @@ pub fn serve_all(listeners: Vec<(SocketAddr, App)>) -> Result<(), String> {
                 "/mcp/{token}",
                 post(post_mcp_with_path_token).get(get_mcp_with_path_token),
             )
+            .route("/pair", post(post_pair))
+            .route("/pair/{code}", get(get_pair))
             .route("/health", get(|| async { "ok" }))
             .with_state(Arc::new(app));
         routers.push((addr, router));
@@ -88,6 +93,55 @@ pub fn serve_all(listeners: Vec<(SocketAddr, App)>) -> Result<(), String> {
                 _ => Ok(()),
             }
         })
+}
+
+/// Pairing: a one-time code is exchanged for the token of the agent it was
+/// made for. It is the one thing a caller without a token may do, so the
+/// answer says nothing about why a code was refused.
+fn pair(app: &App, headers: &HeaderMap, code: &str) -> Response {
+    let no_store = [(header::CACHE_CONTROL, "no-store")];
+    match crate::pair::redeem(app.store.root(), &app.tokens, app.only.as_ref(), code) {
+        Ok(paired) => {
+            let mut reply = serde_json::json!({
+                "agent": paired.agent,
+                "token": paired.token,
+                "use": "Keep this token secret and store it where your secrets go. Send it on \
+                        every request to the MCP endpoint as the header `Authorization: Bearer \
+                        <token>`. This code cannot be used again.",
+            });
+            // Behind a tunnel the Host header is the public name, which gives
+            // the caller its endpoint without anyone typing it.
+            if let Some(host) = headers.get(header::HOST).and_then(|h| h.to_str().ok()) {
+                let scheme = if app.only.is_some() { "https" } else { "http" };
+                reply["mcp"] = Value::String(format!("{scheme}://{host}/mcp"));
+                if app.only.is_some() {
+                    // For a client that can only be given an address.
+                    reply["mcp_with_token"] =
+                        Value::String(format!("{scheme}://{host}/mcp/{}", paired.token));
+                }
+            }
+            eprintln!("lucid-dream: paired {}/{}", paired.agent, paired.label);
+            (no_store, Json(reply)).into_response()
+        }
+        Err(message) => (StatusCode::FORBIDDEN, no_store, message).into_response(),
+    }
+}
+
+async fn post_pair(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {
+    let code = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["code"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    pair(&app, &headers, &code)
+}
+
+/// The same by GET, for an agent that can fetch a page but not post.
+async fn get_pair(
+    State(app): State<Arc<App>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    pair(&app, &headers, &code)
 }
 
 async fn post_mcp(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {

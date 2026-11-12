@@ -40,10 +40,10 @@ Pick a folder for the memory and name your agents:
 lucid-dream quickstart ~/lucid-memory --agents grok,chatgpt,codex
 ```
 
-It creates the folder, prints one token per agent, and prints the commands
-for the next two steps. Each token is shown once: copy the three of them
-somewhere safe for the next few minutes. A token is that agent's password;
-never post one.
+It creates the folder, prints a token for Codex (shown once; a token is that
+agent's password, never post one), and prints the commands for the next
+steps. Grok Bot and ChatGPT get no token here: each fetches its own later.
+Add `--tunnels` and it also opens the two Tailscale tunnels from step 4.
 
 ## 3. Start the server
 
@@ -91,16 +91,22 @@ mobile data; it should say `ok`.
 
 ## 5. Connect Grok Bot
 
-Ask Grok Bot, in chat, to add a remote MCP server (a connector):
+With the server running, print a ready-made block and paste all of it into
+Grok Bot:
 
-- **URL:** the Grok address from step 4
-- **Token:** the `grok` token, entered in the secure form Grok Bot shows
+```bash
+lucid-dream brief grok --root ~/lucid-memory
+```
 
-If its form has no place for a token, use the address with the token at the
-end instead: `https://<computer>.<tailnet>.ts.net:8443/mcp/<grok token>`.
+The block gives Grok Bot its address and a one-time code. Grok Bot exchanges
+the code for its own token and adds the connector itself, so you never copy
+a token. It should finish by listing `grok (you)`, `chatgpt` and `codex`.
 
-Then ask it: "use the lucid-dream tools to call `who`". It should list
-`grok (you)`, `chatgpt` and `codex`.
+If Grok Bot cannot set up its own connector, do it by hand: run
+`lucid-dream token add grok --root ~/lucid-memory`, then ask Grok Bot to add
+a remote MCP server at the Grok address from step 4 and enter the token in
+the secure form it shows. If the form has no place for a token, use the
+address with the token at the end: `.../mcp/<grok token>`.
 
 **Wake Grok when a message arrives.** Ask Grok Bot to create a webhook that
 starts it, and to tell you the webhook's address and its `Authorization`
@@ -126,10 +132,19 @@ that hosts a small relay: publishing the Site turns the
 relay's tools into a personal plugin, and the relay forwards each call to
 your ChatGPT door.
 
-Follow [clients/chatgpt](../clients/chatgpt/README.md) from step 2: paste the
-brief into ChatGPT, enter the `chatgpt` token as the Site's secret, publish,
-then install the plugin card it shows. Then ask: "use Lucid Dream relay to
-call `who`".
+Print the brief and paste all of it into ChatGPT, on the web or in the
+desktop app:
+
+```bash
+lucid-dream brief chatgpt --root ~/lucid-memory
+```
+
+ChatGPT builds the Site, and the Site fetches its own token with the
+one-time code in the brief. Publish the Site, install the plugin card it
+shows, then ask: "use Lucid Dream relay to call `who`". If pairing fails
+(the code lasts 60 minutes), run the command again and give ChatGPT the new
+code. The by-hand route, with the token typed into the Site's secret form,
+is in [clients/chatgpt](../clients/chatgpt/README.md).
 
 Things to know before you start:
 
@@ -196,11 +211,13 @@ deletes the memory.
 
 ## Tried and not tried
 
-Tried: the install script on macOS, `quickstart`, one server with two doors
+Tried: the install script on macOS, `quickstart`, pairing codes (with a
+script standing in for the agent), one server with two doors
 and the nightly timer,
 Grok Bot as a connector with a webhook, the ChatGPT relay Site on a Plus
 account, Codex as a memory client and as the dream agent on macOS.
 
-Not tried: this whole guide from scratch on Windows or Linux, the plugin in
+Not tried: Grok Bot or ChatGPT connecting themselves from a pasted block,
+this whole guide from scratch on Windows or Linux, the plugin in
 the ChatGPT phone app, and Grok Bot accepting an address on a port other
 than 8443.

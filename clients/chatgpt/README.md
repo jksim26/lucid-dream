@@ -57,6 +57,10 @@ three public ports; this uses the last one.
 
 ## 2. Ask ChatGPT to build the relay Site
 
+The short way: `lucid-dream brief chatgpt --root <memory dir>` prints this
+brief with your address filled in and a one-time pairing code, so the Site
+fetches its own token and you skip the secret step below. The long way:
+
 On ChatGPT web or desktop, paste this, filling in the address:
 
 > Use @Sites to build a private website called "Lucid Dream relay" with a single

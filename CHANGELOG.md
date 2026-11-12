@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 (2026-11-12)
+
+- Pairing: `lucid-dream pair <agent>` makes a one-time code that the agent
+  exchanges for its own token at `/pair`, so nobody copies a token by hand.
+  A code works once, for 60 minutes, only at that agent's door; wrong
+  guesses cancel waiting codes.
+- `lucid-dream brief grok|chatgpt` prints a block to paste into that agent:
+  its address and a pairing code, with instructions to connect itself.
+- `quickstart --tunnels` opens the Tailscale tunnels; quickstart no longer
+  prints tokens for Grok and ChatGPT. A door can start before its agent has
+  a token.
+- The README demo is now a real exchange between a Claude Code session and
+  Grok Bot.
+
 ## 0.8.1 (2026-11-12)
 
 - The dream lock is taken atomically and a running dream's lock is never
