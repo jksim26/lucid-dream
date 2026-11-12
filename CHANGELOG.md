@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1 (2026-11-12)
+
+- `read` takes `from_line` and `lines`, so a file too large to read whole,
+  such as a long session record, can be read around a search hit. Before
+  this, a large record could be searched but not read.
+
 ## 0.13.0 (2026-11-12)
 
 - `lucid-dream import --auto` finds the memory Claude Code and Codex already

@@ -63,7 +63,8 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          Tools (pass the arguments through as given):\n\
          - index (no arguments): returns the memory index.\n\
          - list (dir, optional string): lists memory files.\n\
-         - read (path, string): reads one memory file.\n\
+         - read (path, string; from_line, optional integer; lines, optional integer): reads \
+         one memory file, or part of a large one.\n\
          - search (query, string: one or several words separated by commas; deep, optional \
          boolean: also search the archive, session logs and messages; dir, optional string; \
          limit, optional integer): searches memory.\n\

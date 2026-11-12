@@ -43,7 +43,8 @@ impl fmt::Display for StoreError {
             StoreError::TooLarge(p) => {
                 write!(
                     f,
-                    "file too large to read (limit {MAX_READ_BYTES} bytes): {p}"
+                    "file too large to read whole (limit {MAX_READ_BYTES} bytes): {p}; read part of it \
+                     with `from_line` and `lines`"
                 )
             }
             StoreError::Invalid(why) => write!(f, "{why}"),
@@ -225,6 +226,45 @@ impl Store {
             return Err(StoreError::TooLarge(rel.to_string()));
         }
         Ok(fs::read_to_string(&path)?)
+    }
+
+    /// Read `count` lines of a file starting at line `from` (the first line
+    /// is 1). This is how a file too large to read whole is read: a search
+    /// hit gives the line, and this gives what is around it. What comes back
+    /// is cut at the same size a whole read allows.
+    pub fn read_lines(
+        &self,
+        rel: &str,
+        sealed: bool,
+        from: usize,
+        count: usize,
+    ) -> Result<String, StoreError> {
+        use std::io::BufRead;
+        let path = self.resolve(rel)?;
+        if sealed && is_record(&path) {
+            return Err(StoreError::Invalid(SEALED.into()));
+        }
+        if !fs::metadata(&path)?.is_file() {
+            return Err(StoreError::BadPath(format!("{rel} is not a file")));
+        }
+        let from = from.max(1);
+        let mut out = String::new();
+        let mut last = 0;
+        let lines = io::BufReader::new(fs::File::open(&path)?).lines();
+        for (i, line) in lines.enumerate().skip(from - 1).take(count.max(1)) {
+            // A line that is not text ends the read rather than failing it.
+            let Ok(line) = line else { break };
+            if out.len() + line.len() + 1 > MAX_READ_BYTES as usize {
+                break;
+            }
+            out.push_str(&line);
+            out.push('\n');
+            last = i + 1;
+        }
+        Ok(match last {
+            0 => format!("{rel} has no line {from}"),
+            _ => format!("{rel} lines {from}-{last}:\n{out}"),
+        })
     }
 
     /// Every file under `dir` (the whole store when empty), sorted by path.
@@ -1553,6 +1593,44 @@ pub mod tests {
                 other => panic!("{spelling}: {:?}", other.map(|_| "read")),
             }
         }
+    }
+
+    #[test]
+    fn a_large_file_is_read_a_few_lines_at_a_time() {
+        let t = Temp::new();
+        let s = t.store();
+        let big: String = (1..=40_000)
+            .map(|n| format!("line {n} of the record\n"))
+            .collect();
+        assert!(big.len() as u64 > MAX_READ_BYTES);
+        fs::create_dir_all(t.0.join("logs/d")).unwrap();
+        fs::write(t.0.join("logs/d/s-claude.record.md"), &big).unwrap();
+        let rel = "logs/d/s-claude.record.md";
+        assert!(matches!(s.read(rel), Err(StoreError::TooLarge(_))));
+        assert_eq!(
+            s.read_lines(rel, false, 39_999, 5).unwrap(),
+            format!(
+                "{rel} lines 39999-40000:\nline 39999 of the record\nline 40000 of the record\n"
+            )
+        );
+        assert!(s
+            .read_lines(rel, false, 0, 1)
+            .unwrap()
+            .ends_with("line 1 of the record\n"));
+        assert_eq!(
+            s.read_lines(rel, false, 50_000, 5).unwrap(),
+            format!("{rel} has no line 50000")
+        );
+        // Asking for everything still stops at the size a whole read allows.
+        assert!(
+            s.read_lines(rel, false, 1, 1_000_000).unwrap().len() <= MAX_READ_BYTES as usize + 80
+        );
+        // The seal and the path rules hold for a ranged read too.
+        assert!(matches!(
+            s.read_lines(rel, true, 1, 5),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(s.read_lines("../x", false, 1, 5).is_err());
     }
 
     #[test]

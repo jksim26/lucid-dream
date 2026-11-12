@@ -113,10 +113,14 @@ fn tools() -> Value {
         },
         {
             "name": "read",
-            "description": "Read one memory file by its path relative to the memory root, e.g. notes/rust.md.",
+            "description": "Read one memory file by its path relative to the memory root, e.g. notes/rust.md. A file too large to read whole, such as a long session record, is read a part at a time with `from_line`: a `search` hit gives the line number.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "path": { "type": "string" } },
+                "properties": {
+                    "path": { "type": "string" },
+                    "from_line": { "type": "integer", "description": "Read from this line (the first is 1) instead of the whole file." },
+                    "lines": { "type": "integer", "description": "How many lines to read from `from_line` (default 200)." }
+                },
                 "required": ["path"]
             },
             "annotations": read_only,
@@ -328,7 +332,13 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                 .collect::<Vec<_>>()
                 .join("\n")
         }),
-        "read" => store.read_as(&required("path")?, sealed),
+        "read" => match args.get("from_line").and_then(Value::as_u64) {
+            Some(from) => {
+                let count = args.get("lines").and_then(Value::as_u64).unwrap_or(200);
+                store.read_lines(&required("path")?, sealed, from as usize, count as usize)
+            }
+            None => store.read_as(&required("path")?, sealed),
+        },
         "search" => {
             let limit = args
                 .get("limit")

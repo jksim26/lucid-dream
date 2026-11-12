@@ -281,7 +281,7 @@ The server offers eleven tools:
 | Tool | What it does |
 | --- | --- |
 | `index` | Returns `MEMORY.md` |
-| `list`, `read` | Browse the store |
+| `list`, `read` | Browse the store; `read` takes `from_line` for a file too large to read whole |
 | `search` | Searches working memory for any of several comma-separated words; `deep` adds the archive, logs and messages |
 | `remember` | Adds a note to `inbox/` for dream to merge |
 | `log` | Records a session summary in `logs/`, or adds to the session's full record |
