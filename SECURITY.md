@@ -28,6 +28,10 @@ open a public issue for a vulnerability.
   are sent. A webhook's `Authorization` value is read from an environment
   variable and stored outside git.
 
+- **Trusted messengers.** `trust add <agent>` is the user's own decision to
+  let that agent's requests count as theirs for routine actions. It can only
+  be set with file access to the store, and the mark is made by the server.
+
 ## Known limits
 
 - Anyone with file access to the memory store can read and change it without

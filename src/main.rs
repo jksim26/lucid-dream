@@ -8,8 +8,10 @@ mod http;
 mod import;
 mod init;
 mod mcp;
+mod setup;
 mod store;
 mod tokens;
+mod trust;
 mod util;
 mod webhook;
 
@@ -49,8 +51,15 @@ On the machine that holds the memory:
                                                 LUCID_WEBHOOK_AUTH, never the command line
   lucid-dream webhook test|remove <agent> --root <dir>
   lucid-dream webhook list --root <dir>
+  lucid-dream trust add|remove <agent> --root <dir>
+                                                name an agent your trusted messenger: its
+                                                requests count as yours for routine actions
+  lucid-dream trust list --root <dir>
 
 On any device:
+  lucid-dream setup --url URL [--plan]           connect Claude Code on this machine: adds
+                                                the hooks and the MCP server (token from
+                                                LUCID_TOKEN, or typed in); --plan only shows
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
   lucid-dream hook wait [--url URL]             wait for a message, then wake the session
@@ -100,6 +109,8 @@ fn main() -> ExitCode {
         "webhook" => cmd_webhook(raw),
         "channel" => cmd_channel(raw),
         "who" => cmd_who(raw),
+        "trust" => cmd_trust(raw),
+        "setup" => cmd_setup(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
     match result {
@@ -341,6 +352,97 @@ fn cmd_who(raw: Vec<String>) -> Result<(), String> {
     };
     println!("{}", list.trim_end());
     Ok(())
+}
+
+/// Connect Claude Code on this machine to a memory server.
+fn cmd_setup(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--url", "--settings"], &["--plan"])?;
+    let url = args
+        .option("--url")
+        .or_else(|| env("LUCID_URL"))
+        .ok_or("no server; pass --url http://<pc-name>:7878/mcp")?;
+    // The token never goes on the command line: from LUCID_TOKEN, or typed in.
+    let token = match env("LUCID_TOKEN") {
+        Some(token) => token,
+        None => {
+            eprint!("Token for this device (from `lucid-dream token add claude` on the PC): ");
+            let mut line = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut line)
+                .map_err(|e| e.to_string())?;
+            line.trim().to_string()
+        }
+    };
+    if token.is_empty() {
+        return Err("no token given".into());
+    }
+    let settings = match args.option("--settings") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let home = env("HOME")
+                .or_else(|| env("USERPROFILE"))
+                .ok_or("no home folder; pass --settings <file>")?;
+            PathBuf::from(home).join(".claude").join("settings.json")
+        }
+    };
+    let exe = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .display()
+        .to_string()
+        // Claude Code runs hooks through a Unix-style shell on Windows too.
+        .replace('\\', "/");
+    let dry = args.switches.contains("--plan");
+    // Check the server and the token before touching anything.
+    let client = Client::with(url.clone(), token.clone(), HOOK_TIMEOUT);
+    match client.call("who", serde_json::json!({})) {
+        Ok(_) => println!("Server: reachable at {url}, token accepted"),
+        Err(e) if dry => println!("Server: {e}"),
+        Err(e) => return Err(format!("{e}\nNothing was changed.")),
+    }
+    setup::run(
+        &setup::Plan {
+            url,
+            token,
+            exe,
+            settings,
+        },
+        dry,
+    )
+}
+
+/// Name an agent the user's trusted messenger, or take that back. Only on
+/// the machine that holds the memory: it is the user's decision, not one an
+/// agent can make over the network.
+fn cmd_trust(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root"], &[])?;
+    let file = trust::path(args.store()?.root());
+    let words: Vec<&str> = args.words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["add", agent] => {
+            trust::add(&file, agent)?;
+            println!(
+                "{agent} is now a trusted messenger: other agents are told its requests may \
+                 be treated as yours for routine, undoable actions"
+            );
+            Ok(())
+        }
+        ["remove", agent] => {
+            if trust::remove(&file, agent)? {
+                println!("{agent} is no longer a trusted messenger");
+                Ok(())
+            } else {
+                Err(format!("{agent} was not a trusted messenger"))
+            }
+        }
+        ["list"] => {
+            for agent in trust::load(&file) {
+                println!("{agent}");
+            }
+            Ok(())
+        }
+        _ => Err("usage: lucid-dream trust add|remove <agent> | trust list".into()),
+    }
 }
 
 fn cmd_webhook(raw: Vec<String>) -> Result<(), String> {

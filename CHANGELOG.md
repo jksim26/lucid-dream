@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 (2026-11-12)
+
+- `lucid-dream setup` connects Claude Code in one step: hooks, wake-ups and
+  the MCP server, with a backup of the settings file.
+- Trusted messengers: `trust add <agent>` lets that agent's requests count
+  as yours for routine, undoable actions. The server makes the mark.
+
 ## 0.3.3 (2026-11-12)
 
 - MIT license, security policy, this changelog.

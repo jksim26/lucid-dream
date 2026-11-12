@@ -59,7 +59,14 @@ irm https://github.com/jksim26/lucid-dream/releases/latest/download/install.ps1 
 ```
 
 Both check the download against the release's SHA-256 checksums and install
-for the current user only. Or build it: `cargo install --git
+for the current user only. On a machine where Claude Code runs, one more
+command connects it (hooks, wake-ups and the MCP server; it shows what it adds
+and keeps a backup of your settings):
+
+```bash
+lucid-dream setup --url http://<pc-name>:7878/mcp
+```
+ Or build it: `cargo install --git
 https://github.com/jksim26/lucid-dream`. Then
 [set up the machine that holds the memory](#set-up-the-pc-that-holds-the-memory)
 and [connect the agents](#connect-the-agents).
@@ -107,7 +114,7 @@ this repo**: this repo is public, and the store holds your notes.
 | `archive/` | Processed and replaced notes; nothing is hard-deleted | Dream |
 | `MEMORY.md` | The index loaded at session start (under 200 lines) | Dream |
 | `open-questions.md` | Your own conflicting decisions, awaiting your call | Dream |
-| `.lucid/` | Token hashes, who has seen which message, session check-ins; ignored by git | `token add`, server |
+| `.lucid/` | Token hashes, trusted messengers, who has seen which message, session check-ins; ignored by git | `token add`, server |
 
 Every note records two things: `source`, the agent that wrote it down, and
 `said_by`, whose statement it is. `said_by: user` is your own decision; anything
@@ -264,6 +271,29 @@ number then goes to the next new session.
 Each Claude Code session is told its number at start and asked to keep it at
 the front of its title, so in the app you see `#1 Agent memory repo`. The text
 after the number is what `who` shows as the session's topic.
+
+### Trusted messengers
+
+A message proves which agent sent it, not that you asked for it. So when you
+tell Grok "ask the PC to update", the Claude session on the PC still checks
+with you. If you use one agent as your messenger and are happy to skip that
+check for routine requests, say so once, on the machine that holds the memory:
+
+```bash
+lucid-dream trust add grok --root <memory dir>
+```
+
+From then on the server marks Grok's messages "trusted messenger for the
+user" as it hands them over, and tells the recipient that such a request may
+be treated as yours for routine actions that can be undone. Anything
+destructive, irreversible, or involving money, data leaving the machine or
+credentials is still confirmed with you. The mark is made by the server from
+the sender's token, so no agent can give it to itself, and `trust remove
+grok` takes it away at once.
+
+You are trusting that agent to relay you faithfully. It is safest with an
+agent whose app shows you the message and asks before it sends, so that every
+message it sends is one you confirmed.
 
 Messages are handed over labelled as a colleague's notes, not as instructions
 from you. They are not memory either: dream reads them as evidence, like logs,

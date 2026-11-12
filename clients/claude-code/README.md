@@ -8,7 +8,18 @@ Do this on every device where Claude Code runs. `lucid-dream` must be on the PAT
    lucid-dream token add claude --root <memory dir>
    ```
 
-2. Add the MCP server, so Claude can read and write memory during a session:
+2. Connect Claude Code in one step. It asks for the token, shows what it adds
+   to `~/.claude/settings.json`, keeps a backup, and registers the MCP server:
+
+   ```bash
+   lucid-dream setup --url http://<pc-name>:7878/mcp
+   ```
+
+   `--plan` shows the changes without making them. That is all; the remaining
+   steps are the same thing done by hand.
+
+   By hand: add the MCP server, so Claude can read and write memory during a
+   session:
 
    ```bash
    claude mcp add --transport http --scope user lucid-dream http://<pc-name>:7878/mcp --header "Authorization: Bearer <the claude token>"

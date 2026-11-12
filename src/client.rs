@@ -26,6 +26,14 @@ impl Client {
         })
     }
 
+    pub fn with(url: String, token: String, timeout: Duration) -> Client {
+        Client {
+            url,
+            token: Some(token),
+            timeout,
+        }
+    }
+
     pub fn call(&self, tool: &str, arguments: Value) -> Result<String, String> {
         let body = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",

@@ -25,6 +25,8 @@ the server on the Windows PC and pointing each agent at it (see the README).
   with its own token, door and tunnel ([clients/chatgpt](../clients/chatgpt))
 - [x] **12. Sessions** (added 2026-11-12): sessions announce themselves and get a
   number, `who` lists them, and `send` can address one by number
+- [x] **13. Trusted messengers and setup** (added 2026-11-12): `trust add <agent>` for
+  requests relayed on your behalf; `setup` wires Claude Code in one command
 
 Not done anywhere yet:
 
