@@ -16,6 +16,8 @@ and their decisions is there for every other agent tomorrow.
   a preference, a fact about a project), call `remember`. Set `said_by` to `user`
   only for something the user decided or stated themself; leave it out for your
   own view.
+- When the user shows you a picture or a file, say in one line what it shows.
+  Pictures are not stored, so your words are all that memory keeps.
 - Before you finish, call `log` with a short summary of what was asked, what you
   did and what was decided.
 - If the server does not answer, carry on without it and do not retry.

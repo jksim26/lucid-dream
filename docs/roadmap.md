@@ -42,6 +42,8 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
   plugin and a Codex plugin; Codex sessions are logged by hook
 - [x] **20. Record limits** (added 2026-11-12): records sealed at the doors except for
   trusted agents, a per-project off switch, a tighter scrub
+- [x] **21. Any agent** (added 2026-11-12): `import --auto`, `call` for agents with only
+  a shell, `rule`, cloud agents bring their own memories over
 
 Not done yet:
 

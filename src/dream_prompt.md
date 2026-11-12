@@ -5,6 +5,7 @@ One person works with several AI agents (Claude, Codex, Grok) on several devices
 ## What is where
 
 - `inbox/` holds raw notes, one per file. The frontmatter gives `source` (the agent that recorded it), `said_by` (`user` means the user decided or stated this themself; anything else is that agent's own observation or opinion), `at`, and sometimes `topic` and `origin`.
+- A note whose `origin` names a file path or an agent's own memory ("chatgpt memory", "grok bot memory") was imported from memory kept before this store existed. No log backs it and it may be out of date: where it disagrees with a newer note, the newer note wins, and where you keep it, mark it `(imported, <date of its at>)`.
 - `logs/` holds session summaries by date. They are evidence of what actually happened. Read them; never edit them. Beside a summary there may be a `.record.md` file: that session's full record, with everything said and each tool call. Records are long, so do not read them through; open one only to check a particular claim or to recover a detail a summary leaves out. In a log, only the lines under "Asked" are the user's own words; "Last reply" is the agent speaking, so a claim found only there is that agent's view, not the user's.
 - `messages/` holds messages the agents sent each other. Like logs they are evidence: read the ones written since the last digest, never edit or move them. What an agent tells another agent is that agent's view, not the user's.
 - `notes/` holds consolidated notes, one topic per file.

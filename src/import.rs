@@ -81,8 +81,12 @@ pub fn run(paths: &[String], sink: &Sink, said_by: &str) -> Result<Report, Strin
                 matches!(done, Remembered::New(_))
             }
             Sink::Remote(client) => {
-                let args =
-                    json!({ "text": text, "said_by": said_by, "topic": topic, "origin": origin });
+                let mut args = json!({ "text": text, "topic": topic, "origin": origin });
+                // A server lets a caller speak for the user or for itself. An
+                // agent's own old notes go in as the caller's.
+                if said_by == "user" {
+                    args["said_by"] = json!(said_by);
+                }
                 let reply = client
                     .call("remember", args)
                     .map_err(|e| format!("{shown}: {e}"))?;
@@ -96,6 +100,51 @@ pub fn run(paths: &[String], sink: &Sink, said_by: &str) -> Result<Report, Strin
         }
     }
     Ok(report)
+}
+
+/// Old memory found in the places agents are known to keep it: what it is,
+/// whose words it holds, and the files.
+pub struct Found {
+    pub what: &'static str,
+    pub said_by: &'static str,
+    pub files: Vec<PathBuf>,
+}
+
+/// Look for memory this machine's agents already have. `claude` is Claude
+/// Code's folder (`~/.claude`) and `codex` the Codex CLI's (`~/.codex`).
+/// Instruction files are the user's own words; Claude's memory folders hold
+/// what Claude noted, so those go in as Claude's view. Each project's
+/// `MEMORY.md` is only an index of the files beside it, so it is left out.
+pub fn discover(claude: &Path, codex: &Path) -> Vec<Found> {
+    let existing = |file: PathBuf| file.is_file().then_some(file).into_iter().collect();
+    let mut notes = Vec::new();
+    for project in fs::read_dir(claude.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let _ = collect(&project.path().join("memory"), &mut notes);
+    }
+    notes.retain(|file| file.file_name().is_some_and(|name| name != "MEMORY.md"));
+    notes.sort();
+    let found = vec![
+        Found {
+            what: "Claude Code's instructions (CLAUDE.md)",
+            said_by: "user",
+            files: existing(claude.join("CLAUDE.md")),
+        },
+        Found {
+            what: "Claude Code's own memory notes, from every project",
+            said_by: "claude",
+            files: notes,
+        },
+        Found {
+            what: "Codex's instructions (AGENTS.md)",
+            said_by: "user",
+            files: existing(codex.join("AGENTS.md")),
+        },
+    ];
+    found.into_iter().filter(|f| !f.files.is_empty()).collect()
 }
 
 /// Every Markdown file under `dir`, skipping hidden entries and build folders.
@@ -120,6 +169,26 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::store::tests::Temp;
+
+    #[test]
+    fn finds_old_memory_where_agents_keep_it() {
+        let t = Temp::new();
+        let (claude, codex) = (t.0.join("claude"), t.0.join("codex"));
+        let memory = claude.join("projects/-Users-me-app/memory");
+        fs::create_dir_all(&memory).unwrap();
+        fs::create_dir_all(claude.join("projects/-Users-me-empty")).unwrap();
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(claude.join("CLAUDE.md"), "Use Rust.").unwrap();
+        fs::write(memory.join("MEMORY.md"), "- [x](x.md)").unwrap();
+        fs::write(memory.join("x.md"), "The app ships on Fridays.").unwrap();
+        fs::write(claude.join("projects/-Users-me-app/session.jsonl"), "{}").unwrap();
+        let found = discover(&claude, &codex);
+        let shape: Vec<(&str, usize)> = found.iter().map(|f| (f.said_by, f.files.len())).collect();
+        // No AGENTS.md, so Codex is not listed; the index file is left out.
+        assert_eq!(shape, [("user", 1), ("claude", 1)]);
+        assert!(found[1].files[0].ends_with("x.md"));
+        assert!(discover(&t.0.join("nowhere"), &codex).is_empty());
+    }
 
     #[test]
     fn imports_markdown_once() {

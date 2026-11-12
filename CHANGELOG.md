@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0 (2026-11-12)
+
+- `lucid-dream import --auto` finds the memory Claude Code and Codex already
+  keep on a machine (`CLAUDE.md`, Claude Code's memory notes from every
+  project, `AGENTS.md`), lists it and imports it after you agree. The dream
+  marks imported notes as such and lets a newer note win.
+- The Grok Bot and ChatGPT briefs ask the agent to save what it already
+  remembers about you into shared memory.
+- `lucid-dream call <tool> ['<json>']` uses one memory tool from a shell, so
+  an agent with no MCP client can share the memory. `lucid-dream rule`
+  prints the rule to paste into its instructions file. See
+  `clients/generic`.
+- Agents are told to say in one line what a picture or file shows, since
+  pictures are noted in the record but not stored.
+
 ## 0.12.0 (2026-11-12)
 
 - Session records are sealed at the doors. An agent that comes in through a

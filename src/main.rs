@@ -105,6 +105,15 @@ On any device:
                                                 (the plugins call these with --agent
                                                 claude-plugin or --agent codex)
   lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)
+  lucid-dream import --auto [--plan] [--yes] (--root <dir> | --url URL)
+                                                find the memory Claude Code and Codex already
+                                                keep on this machine, show it, and import it
+  lucid-dream call <tool> ['<json>'] (--url URL | --root <dir>)
+                                                use one memory tool from a shell, for any
+                                                agent without MCP: call index, call search
+                                                '{\"query\": \"release, deploy\"}'
+  lucid-dream rule [--mcp]                       print the rule to paste into an agent's
+                                                instructions file (AGENTS.md and the like)
   lucid-dream who [--root <dir> | --url URL]    List the agents and their sessions
   lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
                                                 into a running session (research preview)
@@ -151,6 +160,8 @@ fn main() -> ExitCode {
         "serve" => cmd_serve(raw),
         "dream" => cmd_dream(raw),
         "import" => cmd_import(raw),
+        "call" => cmd_call(raw),
+        "rule" => cmd_rule(raw),
         "webhook" => cmd_webhook(raw),
         "channel" => cmd_channel(raw),
         "who" => cmd_who(raw),
@@ -599,10 +610,19 @@ fn cmd_dream(raw: Vec<String>) -> Result<(), String> {
 }
 
 fn cmd_import(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root", "--url", "--said-by", "--as"], &[])?;
+    let args = Args::parse(
+        raw,
+        &["--root", "--url", "--said-by", "--as"],
+        &["--auto", "--yes", "--plan"],
+    )?;
+    if args.switches.contains("--auto") {
+        return import_auto(&args);
+    }
     if args.words.is_empty() {
         return Err(
-            "usage: lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)".into(),
+            "usage: lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)\n       \
+             lucid-dream import --auto [--plan] [--yes] (--root <dir> | --url URL)"
+                .into(),
         );
     }
     let said_by = args
@@ -629,6 +649,170 @@ fn cmd_import(raw: Vec<String>) -> Result<(), String> {
         "imported {} notes into the inbox ({} already there, {} skipped)",
         report.added, report.duplicates, report.skipped
     );
+    Ok(())
+}
+
+/// `import --auto`: find the memory this machine's agents already keep, show
+/// it, and import it once the user agrees.
+fn import_auto(args: &Args) -> Result<(), String> {
+    let home = env("HOME")
+        .or_else(|| env("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or("no home folder")?;
+    let claude = env("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let codex = setup::codex_home().unwrap_or_else(|| home.join(".codex"));
+    let found = import::discover(&claude, &codex);
+    if found.is_empty() {
+        println!(
+            "Found no older memory in {} or {}. Saved memories inside ChatGPT or Grok Bot \
+             cannot be read from here: ask that agent to save them with `remember` (the \
+             block from `lucid-dream brief` asks it to).",
+            claude.display(),
+            codex.display()
+        );
+        return Ok(());
+    }
+    let total: usize = found.iter().map(|f| f.files.len()).sum();
+    println!("Found {total} file(s) of older memory:");
+    for group in &found {
+        let whose = match group.said_by {
+            "user" => "your own words".to_string(),
+            agent => format!("{agent}'s notes"),
+        };
+        println!(
+            "  {} file(s): {} (imported as {whose})",
+            group.files.len(),
+            group.what
+        );
+        for file in group.files.iter().take(5) {
+            println!("      {}", file.display());
+        }
+        if group.files.len() > 5 {
+            println!("      ... and {} more", group.files.len() - 5);
+        }
+    }
+    if args.switches.contains("--plan") {
+        println!("Nothing was imported (--plan).");
+        return Ok(());
+    }
+    if !args.switches.contains("--yes") {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            println!("Nothing was imported. Run it again with --yes to import these.");
+            return Ok(());
+        }
+        eprint!("Import these into shared memory, for every connected agent to read? [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut answer)
+            .map_err(|e| e.to_string())?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Nothing was imported.");
+            return Ok(());
+        }
+    }
+    let local = args.option("--root").is_some()
+        || (args.option("--url").is_none() && env("LUCID_URL").is_none());
+    let (store, client) = if local {
+        (Some(args.store()?), None)
+    } else {
+        let client = Client::from_env(args.option("--url"), IMPORT_TIMEOUT)?;
+        (None, Some(client))
+    };
+    let mut all = import::Report::default();
+    for group in &found {
+        let paths: Vec<String> = group
+            .files
+            .iter()
+            .map(|file| file.to_string_lossy().into_owned())
+            .collect();
+        let sink = match (&store, &client) {
+            (Some(store), _) => import::Sink::Local {
+                store,
+                source: "import",
+            },
+            (None, Some(client)) => import::Sink::Remote(client),
+            (None, None) => unreachable!("one of the two was made above"),
+        };
+        let report = import::run(&paths, &sink, group.said_by)?;
+        all.added += report.added;
+        all.duplicates += report.duplicates;
+        all.skipped += report.skipped;
+    }
+    println!(
+        "imported {} notes into the inbox ({} already there, {} skipped). The next dream \
+         merges them; `lucid-dream dream` does it now.",
+        all.added, all.duplicates, all.skipped
+    );
+    Ok(())
+}
+
+/// The rule that tells an agent how to use the memory, ready to paste into
+/// its instructions file.
+fn cmd_rule(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &[], &["--mcp"])?;
+    print!(
+        "{}",
+        match args.switches.contains("--mcp") {
+            true => include_str!("../clients/codex/AGENTS.md"),
+            false => include_str!("../clients/generic/AGENTS.md"),
+        }
+    );
+    Ok(())
+}
+
+/// `call <tool> [json]`: use one memory tool from a shell, for an agent that
+/// has no MCP client. The arguments are a JSON object, or `-` to read one
+/// from stdin.
+fn cmd_call(raw: Vec<String>) -> Result<(), String> {
+    const HOW: &str = "usage: lucid-dream call <tool> ['<json arguments>' | -] \
+                       (--url URL | --root <dir> [--as <agent>])";
+    let args = Args::parse(raw, &["--root", "--url", "--as"], &[])?;
+    let (tool, given) = match args.words.as_slice() {
+        [tool] => (tool, "{}".to_string()),
+        [tool, json] if json == "-" => {
+            let mut text = String::new();
+            std::io::stdin()
+                .read_to_string(&mut text)
+                .map_err(|e| e.to_string())?;
+            (tool, text)
+        }
+        [tool, json] => (tool, json.clone()),
+        _ => return Err(HOW.into()),
+    };
+    let arguments: serde_json::Value = serde_json::from_str(&given)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .ok_or(format!("the arguments must be a JSON object\n{HOW}"))?;
+    let local = args.option("--root").is_some()
+        || (args.option("--url").is_none() && env("LUCID_URL").is_none());
+    let text = if local {
+        let who = args
+            .option("--as")
+            .unwrap_or_else(|| http::LOCAL.to_string());
+        if !util::valid_name(&who) || who == "user" {
+            return Err(format!("bad agent name for --as: {who}"));
+        }
+        let msg = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments } });
+        let reply = mcp::handle(&args.store()?, &who, &msg).ok_or("no reply")?;
+        if let Some(message) = reply["error"]["message"].as_str() {
+            return Err(message.to_string());
+        }
+        let text = reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if reply["result"]["isError"] == true {
+            return Err(text);
+        }
+        text
+    } else {
+        Client::from_env(args.option("--url"), IMPORT_TIMEOUT)?.call(tool, arguments)?
+    };
+    println!("{}", text.trim_end());
     Ok(())
 }
 

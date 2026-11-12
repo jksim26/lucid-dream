@@ -274,6 +274,7 @@ over stdio instead.
 - Claude app on phone, web or desktop: [clients/claude-app](clients/claude-app)
 - Grok: [clients/grok](clients/grok)
 - ChatGPT, through a Site it hosts: [clients/chatgpt](clients/chatgpt)
+- Any other agent, including one running a local model: [clients/generic](clients/generic)
 
 The server offers eleven tools:
 
@@ -529,8 +530,24 @@ lucid-dream serve --root <memory dir> --dream-at 03:00
 
 ## Import old memory
 
-Each Markdown file becomes one inbox note, so dream merges it under the same
-rules as everything else. Importing the same file twice adds nothing.
+To bring over what Claude Code and Codex already keep on a machine, let it
+look in the known places. It lists what it found and asks before importing
+(`--plan` only lists):
+
+```bash
+lucid-dream import --auto --url http://<pc-name>:7878/mcp
+```
+
+It takes `CLAUDE.md`, Claude Code's own memory notes from every project, and
+Codex's `AGENTS.md`. Memory saved inside ChatGPT or Grok Bot lives with that
+vendor and cannot be read from a file: the block from `lucid-dream brief`
+asks the agent to save it into shared memory itself. Imported notes have no
+session log behind them, so the dream marks them as imported and lets a
+newer note win.
+
+Any other Markdown works by path. Each file becomes one inbox note, so dream
+merges it under the same rules as everything else. Importing the same file
+twice adds nothing.
 
 ```bash
 lucid-dream import ~/.claude/CLAUDE.md ~/Obsidian/Vault --url http://<pc-name>:7878/mcp

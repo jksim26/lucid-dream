@@ -19,12 +19,17 @@ pub fn grok(address: &str, code: &str) -> String {
          \n\
          5. Save the rest of this message as a standing instruction of your own, so it holds \
          in every later conversation without my repeating it, and tell me that you did.\n\
+         6. Bring over what you already know about me: for each thing in your own saved \
+         memory that is still true, call `remember` once, one subject per note, with `topic` \
+         set and `origin` set to \"grok bot memory\". Set `said_by` to \"user\" only where \
+         I stated it myself. Tell me how many you saved.\n\
          \n\
          Standing instruction: at the start of a conversation load `index` and check \
          `messages`. Use `remember` for anything worth keeping, with `said_by` set to \"user\" \
          only for things I decided or stated myself. When you look something up, give `search` \
          several likely words separated by commas, and set `deep` to true if working memory \
-         has no answer. Nothing logs your conversations for you, so when a piece of work is \
+         has no answer. When I show you a picture or a file, say in one line what it shows, \
+         since pictures are not stored. Nothing logs your conversations for you, so when a piece of work is \
          finished call `log` with a short summary: what I asked, what you did, what was \
          decided.\n"
     )
@@ -82,7 +87,13 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          `said_by` \"user\" only for things I decided or stated myself; give `search` several \
          likely words separated by commas, with `deep` true if working memory has no answer; \
          and when a piece of work is finished call `log` with a short summary of what I \
-         asked, what you did and what was decided.\n"
+         asked, what you did and what was decided. When I show you a picture or a file, say \
+         in one line what it shows, since pictures are not stored.\n\
+         \n\
+         Last, once the plugin is installed, bring over what you already know about me: for \
+         each thing in your saved memories that is still true, call `remember` once, one \
+         subject per note, with `topic` set and `origin` set to \"chatgpt memory\". Set \
+         `said_by` to \"user\" only where I stated it myself. Tell me how many you saved.\n"
     )
 }
 

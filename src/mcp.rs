@@ -25,7 +25,8 @@ Write: call `remember` when you learn something a future session would want: a d
 correction, a preference, a fact about a project. Use your judgement about what is worth \
 keeping. Set said_by to \"user\" only for something the user themself decided or stated; leave \
 it out for your own view. You cannot edit memory directly: notes go to an inbox and a nightly \
-dream job merges them. If nothing logs your sessions for you (Claude Code does it with a hook), \
+dream job merges them. When the user shows you a picture or a file, say in one line what it \
+shows: pictures are not stored, so your words are all that memory keeps. If nothing logs your sessions for you (Claude Code does it with a hook), \
 call `log` before you finish a piece of work, with a short summary of what was asked, what you \
 did and what was decided.\n\n\
 Talk: `send` leaves a message for another agent (claude, codex, grok, or \"all\"); `messages` \
