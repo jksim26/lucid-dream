@@ -44,13 +44,12 @@ Then:
 
 ## What was tried
 
-On 2026-11-12, macOS, from a local copy of this marketplace: both plugins
-install; the Codex plugin's hooks loaded the index and logged a real
+On 2026-11-12, macOS: both plugins install from this GitHub repository and
+from a local copy; the Codex plugin's hooks loaded the index and logged a real
 `codex exec` session (Codex CLI 0.164, hooks trusted for that run with
 `--dangerously-bypass-hook-trust`); the Claude Code plugin's hooks were run
 by hand with the plugin's options and loaded the index and logged a session.
 
 Not tried: a real Claude Code session with the plugin enabled (so the option
 prompt, the memory tools through the plugin and the wake-up are unproven
-there), installing from GitHub rather than a local folder, and either plugin
-on Windows or Linux.
+there), and either plugin on Windows or Linux.
