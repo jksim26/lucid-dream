@@ -58,3 +58,17 @@ Electron IDE for running several coding agents (Claude, Codex, OpenCode, Cursor,
 Grok). Not a memory system.
 
 Take: a possible client. Any agent it runs can use this memory through MCP.
+
+## akitaonrails/ai-memory (MIT)
+
+https://github.com/akitaonrails/ai-memory (read 2026-11-12, README only)
+
+Long-term memory for coding agents: lifecycle hooks capture work silently, a
+git-backed Markdown wiki is the source of truth with a derived search index,
+memory ages without an LLM, and handoffs between agents are claimed once. Far
+broader than this project (dozens of agent integrations, teams, a console).
+
+Take: how it is packaged, not its code. A checksum-verified install script, a
+changelog and security policy, and a comparison that says plainly what each
+tool is for. Ideas to consider later: a one-command `setup` that wires every
+agent it finds, an indexed full-text search, handoffs with an owner.

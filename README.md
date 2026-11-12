@@ -1,16 +1,83 @@
 # lucid-dream
 
-One shared memory that every agent reads and dream tidies.
+> Your AI agents can message and wake each other, across vendors and devices,
+> and share one memory. Ask Grok on your phone to tell Claude on your PC
+> something; the Claude session wakes up and answers.
 
-Claude, Codex and Grok write tagged notes to an add-only inbox over MCP. A nightly
-"dream" job merges them into notes, a wiki and a small `MEMORY.md` index, keeps each
-voice, archives what is replaced, and commits to git. Every agent on every device
-loads the index at session start.
+[![Release](https://img.shields.io/github/v/release/jksim26/lucid-dream)](https://github.com/jksim26/lucid-dream/releases/latest)
+[![CI](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml/badge.svg)](https://github.com/jksim26/lucid-dream/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-It is also the bridge between the agents: any of them can leave a message for
-another, and it is delivered at the start of that agent's next session.
+Claude, Codex, Grok and ChatGPT each live in their own app with their own
+memory, and none of them can reach another. lucid-dream is one small server
+you run on your own machine that gives them two things in common.
 
-Roadmap board: https://claude.ai/artifact/A9MQA4ajBmiFMY1XnRyRaZ
+**A bridge.** Any agent can send a message to another, or to one particular
+session of it. The recipient is woken within a second where its app allows
+it: a Claude Code session (terminal or desktop app) by a background hook, an
+agent with a webhook by a call that says only "you have a message". `who`
+lists every agent and session and which are listening:
+
+```
+claude:
+  #1 "Stops review" on pc (X:\code\trading): listening now
+  #2 "Agent memory repo" on mac (~/code/lucid-dream): listening now
+grok: woken by webhook when a message arrives
+chatgpt: reads messages when it next looks
+```
+
+**A memory.** Agents write notes to an add-only inbox over MCP. A "dream" job
+merges them into notes, a wiki and a small `MEMORY.md` index that every agent
+loads at session start. It is plain Markdown in git: read it, edit it, revert
+it. Each note keeps its voice, so your decisions are never confused with an
+agent's opinion.
+
+It is one Rust binary with no database. Each client gets its own token, and a
+cloud client such as a phone app gets its own door, so one can be cut off
+without touching the others.
+
+| Agent | Memory | Sends | Woken when a message arrives |
+| --- | --- | --- | --- |
+| Claude Code, terminal and desktop app | yes | yes | yes, by hook |
+| Grok, through its remote MCP support | yes | yes | yes, by webhook |
+| Claude app on phone and web | yes | yes | no, reads on request |
+| ChatGPT, through a Site it hosts | yes | yes | no, reads on request |
+| Codex | guide written, not yet tested | | not yet |
+
+## Install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://github.com/jksim26/lucid-dream/releases/latest/download/install.sh | sh
+```
+
+Windows, in PowerShell:
+
+```powershell
+irm https://github.com/jksim26/lucid-dream/releases/latest/download/install.ps1 | iex
+```
+
+Both check the download against the release's SHA-256 checksums and install
+for the current user only. Or build it: `cargo install --git
+https://github.com/jksim26/lucid-dream`. Then
+[set up the machine that holds the memory](#set-up-the-pc-that-holds-the-memory)
+and [connect the agents](#connect-the-agents).
+
+## How it compares
+
+Most agent-memory projects, [ai-memory](https://github.com/akitaonrails/ai-memory)
+being the most complete, are about memory for coding agents: capture, search,
+handoff. If that is what you need, use one of them; they do far more of it
+than this does. lucid-dream is for the other half: agents from different
+vendors, including the chat apps on your phone, talking to each other and
+waking each other while you are not at the keyboard. Its memory is
+deliberately small.
+
+The memory design follows Anthropic's
+[components of agent memory](https://www.anthropic.com/research/components-of-agent-memory);
+[docs/references.md](docs/references.md) lists every project this borrows
+ideas from.
 
 ## How memory flows
 
@@ -49,13 +116,7 @@ for another agent. The [voice rules](docs/roadmap.md#voice-rules) build on this.
 
 ## Set up the PC that holds the memory
 
-Download the binary for your system from the
-[latest release](https://github.com/jksim26/lucid-dream/releases/latest) and put
-it somewhere on your PATH. Or build it yourself with Rust:
-
-```bash
-cargo install --git https://github.com/jksim26/lucid-dream
-```
+[Install](#install) the binary, then create the store:
 
 ```bash
 lucid-dream init <memory dir>
@@ -266,6 +327,8 @@ the server.
 
 ## Status
 
-All roadmap steps are built; see [docs/roadmap.md](docs/roadmap.md) for
-what is left to deploy and [docs/references.md](docs/references.md) for the
-projects this borrows from.
+Young and built for one person's machines: it runs daily on a Windows PC and
+a Mac with Claude, Grok and ChatGPT connected. See
+[docs/roadmap.md](docs/roadmap.md) for what is built,
+[CHANGELOG.md](CHANGELOG.md) for what changed, and [SECURITY.md](SECURITY.md)
+for what the design relies on. MIT licensed.

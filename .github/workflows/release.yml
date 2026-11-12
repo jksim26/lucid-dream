@@ -41,3 +41,20 @@ jobs:
           cp "${{ matrix.file }}" "${{ matrix.asset }}"
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes || true
           gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber
+
+  # After every binary is attached: publish their checksums and the install
+  # scripts, which refuse to install a download that does not match.
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish checksums and install scripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir assets
+          gh release download "$GITHUB_REF_NAME" --dir assets --pattern 'lucid-dream-*'
+          (cd assets && sha256sum lucid-dream-* > ../SHA256SUMS)
+          cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS install.sh install.ps1 --clobber
