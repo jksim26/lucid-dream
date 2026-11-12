@@ -315,11 +315,12 @@ fn dream(root: &Path, dry_run: bool) -> Result<String, String> {
     let today = Utc::now().date();
     let inbox = count_files(&root.join("inbox"));
     let dirty = !git(root, &["status", "--porcelain"])?.trim().is_empty();
-    if inbox == 0 && !dirty {
+    let also = std::env::var(ALSO_ENV).unwrap_or_default();
+    if inbox == 0 && !dirty && also.trim().is_empty() {
         return Ok("nothing to dream: the inbox is empty and no logs are new".into());
     }
 
-    let attempts = commands(&today);
+    let attempts = commands(&today, inbox);
     if dry_run {
         println!("would dream over {inbox} inbox notes in {}", root.display());
         for (i, (program, args, _)) in attempts.iter().enumerate() {
@@ -409,28 +410,89 @@ type Attempt = (String, Vec<String>, Option<String>);
 /// The agents to try, in order. The default is Claude alone. LUCID_DREAM_CMD
 /// replaces it, and may list several commands separated by `||`; the next is
 /// tried when one fails, e.g. `claude || codex exec --sandbox workspace-write`.
-fn commands(today: &str) -> Vec<Attempt> {
-    let custom = std::env::var("LUCID_DREAM_CMD").unwrap_or_default();
-    let model = std::env::var(MODEL_ENV).unwrap_or_default();
-    attempts(&custom, &model, today)
+fn commands(today: &str, inbox: usize) -> Vec<Attempt> {
+    let env = |key: &str| std::env::var(key).unwrap_or_default();
+    let models = Models {
+        claude: match env(MODEL_ENV).trim() {
+            "" => model_for(inbox).to_string(),
+            chosen => chosen.to_string(),
+        },
+        codex: env(CODEX_MODEL_ENV),
+    };
+    attempts(&env("LUCID_DREAM_CMD"), &models, &env(ALSO_ENV), today)
 }
 
-fn attempts(custom: &str, model: &str, today: &str) -> Vec<Attempt> {
-    let prompt = format!("Today is {today}.\n\n{PROMPT}");
+/// Which models the built-in commands ask for.
+struct Models {
+    claude: String,
+    codex: String,
+}
+
+/// A one-off instruction for a dream run by hand (`dream --also "..."`).
+pub const ALSO_ENV: &str = "LUCID_DREAM_ALSO";
+const MAX_ALSO_CHARS: usize = 4000;
+
+/// More inbox notes than this is a big job: a first import, or weeks of
+/// notes at once. Those go to the larger model, because sorting hundreds of
+/// notes into pages while keeping who said what is where a smaller one
+/// starts to cut corners. A normal night is a handful of notes.
+pub const BIG_INBOX: usize = 40;
+pub const BIG_MODEL: &str = "opus";
+
+/// The Claude model for a dream over `inbox` notes, when none is set.
+pub fn model_for(inbox: usize) -> &'static str {
+    if inbox > BIG_INBOX {
+        BIG_MODEL
+    } else {
+        DEFAULT_MODEL
+    }
+}
+
+fn attempts(custom: &str, models: &Models, also: &str, today: &str) -> Vec<Attempt> {
+    let mut prompt = format!("Today is {today}.\n\n{PROMPT}");
+    let also: String = also.trim().chars().take(MAX_ALSO_CHARS).collect();
+    if !also.is_empty() {
+        prompt.push_str(&format!(
+            "\n## For this run only\n\nThe user started this dream by hand and asks for \
+             this as well. Do it under every rule above; where it conflicts with one, the \
+             rule wins.\n\n{also}\n"
+        ));
+    }
     // The built-in Claude command, on the chosen model first. If Claude Code
     // on this machine does not take that model, its own default is tried.
-    let built_in = || match claude_model(model) {
+    let built_in = || match model_name(&models.claude, DEFAULT_MODEL) {
         Some(model) => vec![claude(&prompt, Some(model)), claude(&prompt, None)],
         None => vec![claude(&prompt, None)],
+    };
+    // The same for Codex: its workhorse model, then its own default.
+    let codex = || {
+        let with = |model: Option<&str>| -> Attempt {
+            let mut args: Vec<String> = ["exec", "--sandbox", "workspace-write"]
+                .map(str::to_string)
+                .into();
+            if let Some(model) = model {
+                args.extend(["-m".to_string(), model.to_string()]);
+            }
+            args.push(prompt.clone());
+            ("codex".to_string(), args, None)
+        };
+        match model_name(&models.codex, DEFAULT_CODEX_MODEL) {
+            Some(model) => vec![with(Some(model)), with(None)],
+            None => vec![with(None)],
+        }
     };
     let mut list: Vec<Attempt> = custom
         .split("||")
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .flat_map(|c| {
-            // A bare `claude` means the built-in command with its tool allowlist.
+            // A bare `claude` means the built-in command with its tool allowlist,
+            // and a bare `codex` the built-in Codex command.
             if c == "claude" {
                 return built_in();
+            }
+            if c == "codex" {
+                return codex();
             }
             let mut parts = c.split_whitespace().map(str::to_string);
             let program = parts.next().unwrap_or_default();
@@ -450,14 +512,18 @@ fn attempts(custom: &str, model: &str, today: &str) -> Vec<Attempt> {
 /// notes does not need the largest model, and the dream runs every night.
 pub const DEFAULT_MODEL: &str = "sonnet";
 pub const MODEL_ENV: &str = "LUCID_DREAM_MODEL";
+/// Codex has no alias that follows its newest workhorse model, so this is a
+/// dated name; when it is retired the dream falls back to Codex's default.
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-6.1-sol";
+pub const CODEX_MODEL_ENV: &str = "LUCID_DREAM_CODEX_MODEL";
 
 /// The model to pass to Claude Code: an alias (`sonnet`, `haiku`, `opus`) or
 /// a full model name. `default` means leave it to Claude Code's own setting.
 /// Anything that is not a plain model name is ignored, since it becomes a
 /// command-line argument.
-fn claude_model(model: &str) -> Option<&str> {
+fn model_name<'a>(model: &'a str, unset: &'a str) -> Option<&'a str> {
     let model = match model.trim() {
-        "" => DEFAULT_MODEL,
+        "" => unset,
         model => model,
     };
     let plain = model
@@ -633,17 +699,23 @@ mod tests {
     #[test]
     fn the_default_agent_gets_the_dated_prompt_and_a_tool_allowlist() {
         // Sonnet first; then whatever Claude Code on the machine defaults to.
-        let list = attempts("", "", "2026-11-11");
+        let models = |claude: &str| Models {
+            claude: claude.to_string(),
+            codex: String::new(),
+        };
+        let list = attempts("", &models(""), "", "2026-11-11");
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].1[..3], ["-p", "--model", "sonnet"]);
         assert!(!list[1].1.contains(&"--model".to_string()));
         assert_eq!(
-            attempts("", "haiku", "d")[0].1[..3],
+            attempts("", &models("haiku"), "", "d")[0].1[..3],
             ["-p", "--model", "haiku"]
         );
+        // A big inbox goes to the larger model unless one was chosen.
+        assert_eq!((model_for(5), model_for(BIG_INBOX + 1)), ("sonnet", "opus"));
         // `default`, or something that is not a model name, asks for no model.
         for unset in ["default", "--dangerously-skip-permissions", "a b", "x;y"] {
-            let list = attempts("", unset, "d");
+            let list = attempts("", &models(unset), "", "d");
             assert_eq!(list.len(), 1, "{unset}");
             assert!(!list[0].1.contains(&"--model".to_string()), "{unset}");
         }
@@ -660,9 +732,14 @@ mod tests {
 
     #[test]
     fn a_list_of_agents_is_tried_in_order() {
+        let own = Models {
+            claude: "default".to_string(),
+            codex: String::new(),
+        };
         let list = attempts(
             "claude || codex exec -s workspace-write ||",
-            "default",
+            &own,
+            "",
             "2026-11-11",
         );
         assert_eq!(list.len(), 2);
@@ -671,6 +748,30 @@ mod tests {
         assert_eq!(list[1].0, "codex");
         assert_eq!(list[1].1[..3], ["exec", "-s", "workspace-write"]);
         assert!(list[1].1[3].starts_with("Today is 2026-11-11.") && list[1].2.is_none());
+
+        // A bare `codex` is the built-in command: its workhorse model first,
+        // then Codex's own default. A one-off request rides at the end of
+        // the prompt, cut to a sane length.
+        let list = attempts("codex", &own, &"re-mark pages ".repeat(1000), "d");
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list[0].1[..5],
+            ["exec", "--sandbox", "workspace-write", "-m", "gpt-6.1-sol"]
+        );
+        assert!(!list[1].1.contains(&"-m".to_string()));
+        let prompt = &list[1].1[3];
+        assert!(prompt.contains("## For this run only") && prompt.contains("re-mark pages"));
+        assert!(prompt.len() < PROMPT.len() + MAX_ALSO_CHARS + 400);
+        let chosen = Models {
+            claude: String::new(),
+            codex: "gpt-6-luna".to_string(),
+        };
+        assert_eq!(attempts("codex", &chosen, "", "d")[0].1[4], "gpt-6-luna");
+        assert!(!attempts("claude", &chosen, "", "d")[0]
+            .2
+            .clone()
+            .unwrap()
+            .contains("For this run only"));
     }
 
     #[cfg(unix)]
@@ -699,9 +800,14 @@ mod tests {
         // The first agent spoils a tracked file and fails; the second succeeds.
         let bad = script("bad.sh", "echo spoiled > notes/keep.md; exit 3");
         let good = script("good.sh", "echo dreamt > notes/dreamt.md");
+        let own = Models {
+            claude: "default".to_string(),
+            codex: String::new(),
+        };
         let list = attempts(
             &format!("{bad} || missing-agent-xyz || {good}"),
-            "default",
+            &own,
+            "",
             "2026-11-11",
         );
         first_success(&list, &store).unwrap();
@@ -711,7 +817,7 @@ mod tests {
         );
         assert!(store.join("notes/dreamt.md").exists());
 
-        let failed = first_success(&attempts(&bad, "default", "2026-11-11"), &store).unwrap_err();
+        let failed = first_success(&attempts(&bad, &own, "", "2026-11-11"), &store).unwrap_err();
         assert!(failed.contains("memory left as it was"), "{failed}");
         assert_eq!(
             fs::read_to_string(store.join("notes/keep.md")).unwrap(),

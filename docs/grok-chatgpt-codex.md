@@ -48,7 +48,7 @@ Add `--tunnels` and it also opens the two Tailscale tunnels from step 4.
 ## 3. Start the server
 
 ```bash
-lucid-dream serve --root ~/lucid-memory --doors grok=7882,chatgpt=7883 --dream-at 03:00 --dream-with "codex exec --sandbox workspace-write"
+lucid-dream serve --root ~/lucid-memory --doors grok=7882,chatgpt=7883 --dream-at 03:00 --dream-with codex
 ```
 
 Leave it running. This one process is the server for your own computer
@@ -166,7 +166,7 @@ The server from step 3 dreams by itself every night. Try one now so you have
 seen what it does:
 
 ```bash
-LUCID_DREAM_CMD="codex exec --sandbox workspace-write" lucid-dream dream --root ~/lucid-memory
+LUCID_DREAM_CMD=codex lucid-dream dream --root ~/lucid-memory
 ```
 
 It merges the day's notes into pages, rebuilds the index and commits to the

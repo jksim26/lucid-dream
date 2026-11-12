@@ -69,6 +69,9 @@ On the machine that holds the memory:
   lucid-dream serve --root <dir> --stdio [--as <agent>]
   lucid-dream dream --root <dir> [--dry-run] [--backup-to <folder>]
                                                 consolidate the inbox and commit
+  lucid-dream dream --root <dir> --also \"<request>\"
+                                                the same, with one extra request for this
+                                                run only, such as going back over pages
   lucid-dream webhook set <agent> --url URL --root <dir>
                                                 wake that agent when it gets a message;
                                                 its Authorization value is read from
@@ -124,12 +127,14 @@ Environment:
   LUCID_URL        server endpoint for hooks and import, e.g. http://my-pc:7878/mcp
   LUCID_TOKEN      this device's agent token, for hooks and import
   LUCID_BACKUP_DIR folder for a backup after each dream, instead of --backup-to
-  LUCID_DREAM_MODEL the Claude model for dream: sonnet (the default), haiku, opus, a full
-                   model name, or `default` for Claude Code's own setting. Also
-                   --dream-model on serve and dream
+  LUCID_DREAM_MODEL the Claude model for dream: sonnet, haiku, opus, a full model name, or
+                   `default` for Claude Code's own setting. Unset, it is sonnet, and
+                   opus when more than 40 notes wait. Also --dream-model
+  LUCID_DREAM_CODEX_MODEL the model for a bare `codex` dream (default gpt-6.1-sol)
   LUCID_DREAM_CMD  agent command for dream; the prompt is appended (default: claude -p).
                    Several, separated by ||, are tried in order until one succeeds,
-                   e.g. \"claude || codex exec --sandbox workspace-write\"
+                   e.g. \"claude || codex\". A bare `claude` or `codex` is the built-in
+                   command for that agent, with its model chosen as below
 
 lucid-dream --version prints the installed version.
 ";
@@ -519,7 +524,7 @@ fn cmd_quickstart(raw: Vec<String>) -> Result<(), String> {
     serve.push_str(" --dream-at 03:00");
     let has = |name: &str| agents.iter().any(|a| a == name);
     if has("codex") && !has("claude") {
-        serve.push_str(" --dream-with \"codex exec --sandbox workspace-write\"");
+        serve.push_str(" --dream-with codex");
     }
     println!(
         "\nNext, start the server and leave it running. It also tidies the memory every \
@@ -604,10 +609,15 @@ fn serve_stdio(store: &Store, who: &str) -> std::io::Result<()> {
 fn cmd_dream(raw: Vec<String>) -> Result<(), String> {
     let args = Args::parse(
         raw,
-        &["--root", "--backup-to", "--dream-model"],
+        &["--root", "--backup-to", "--dream-model", "--also"],
         &["--dry-run"],
     )?;
     args.store()?;
+    // `--also "..."`: something extra for this one run, such as going back
+    // over pages. Only here, by hand, on the machine that holds the memory.
+    if let Some(also) = args.option("--also") {
+        std::env::set_var(dream::ALSO_ENV, also);
+    }
     if let Some(model) = args.option("--dream-model") {
         std::env::set_var(dream::MODEL_ENV, model);
     }

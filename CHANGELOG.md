@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0 (2026-11-12)
+
+- The dream picks its model by the size of the job: Sonnet for a normal
+  night, Opus when more than 40 notes wait. A model you set is always used.
+- A bare `codex` as the dream agent is now a built-in command on Codex's
+  workhorse model (`gpt-6.1-sol`, or `LUCID_DREAM_CODEX_MODEL`), then on
+  Codex's own default. `quickstart` and the guide use it.
+- The dream prompt asks for the voice mark on each line, imported facts
+  included (`(claude's record, imported, 2026-08-04)`), not one sentence at
+  the top of a page.
+- `lucid-dream dream --also "<request>"` adds one request to a dream started
+  by hand.
+
 ## 0.14.0 (2026-11-12)
 
 - The dream asks Claude Code for Sonnet instead of running on whatever

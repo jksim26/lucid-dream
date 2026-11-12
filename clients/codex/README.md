@@ -39,6 +39,9 @@ and `remember` all worked against a lucid-dream server.
 ## Codex as the dream agent
 
 To let Codex run the nightly dream instead of Claude, set
-`LUCID_DREAM_CMD="codex exec --sandbox workspace-write"` for the dream job.
+`LUCID_DREAM_CMD=codex` for the dream job. That runs `codex exec --sandbox
+workspace-write` on Codex's workhorse model (`gpt-6.1-sol`; set
+`LUCID_DREAM_CODEX_MODEL` for another), not on the model your own Codex
+sessions use.
 It runs on your ChatGPT subscription. Codex's sandbox does not let it run
 `git mv`, so lucid-dream archives the processed inbox notes itself.

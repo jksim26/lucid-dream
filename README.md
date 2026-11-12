@@ -489,7 +489,10 @@ lucid-dream dream --root <memory dir>
 Dream commits whatever arrived since last time (`intake: ...`), hands the inbox to
 an agent with [this prompt](src/dream_prompt.md), and commits the result
 (`dream: <date>`). Review it with `git show --stat`; undo it with `git revert`.
-`--dry-run` shows what it would do.
+`--dry-run` shows what it would do, including which model it would ask for.
+`--also "<request>"` adds one request to a dream you start by hand, for
+example to go back over pages after a prompt change; the dream's rules still
+win over it.
 
 To keep a copy somewhere else, add `--backup-to <folder>` (to `dream` or to
 `serve`): after each dream the whole memory, with its history, is written
@@ -501,14 +504,18 @@ The file is not encrypted, and tokens are not in it.
   commands. It runs on your Claude subscription; no API key is needed. Set
   `LUCID_DREAM_CMD` to use another one; the prompt is appended.
 - It asks Claude Code for Sonnet, not for whatever model your own sessions
-  use: merging notes every night does not need the largest one.
-  `--dream-model haiku` (or `LUCID_DREAM_MODEL`) picks another, a full model
-  name works too, and `default` leaves it to Claude Code. If the machine's
-  Claude Code does not take the model asked for, its own default is tried.
-  Only Sonnet as an alias was checked against the command's shape, not run.
+  use: merging a night's notes does not need the largest one. When more than
+  40 notes are waiting (a first import, say) it asks for Opus, because that
+  is where a smaller model starts to cut corners. `--dream-model haiku` (or
+  `LUCID_DREAM_MODEL`) fixes the choice, a full model name works too, and
+  `default` leaves it to Claude Code. If the machine's Claude Code does not
+  take the model asked for, its own default is tried.
+- A bare `codex` is the built-in Codex command, `codex exec --sandbox
+  workspace-write`, on its workhorse model (`gpt-6.1-sol`, or
+  `LUCID_DREAM_CODEX_MODEL`), then on Codex's own default.
 - List several agents with `||` and dream tries them in order, so a night when
   one is out of quota still gets its dream:
-  `LUCID_DREAM_CMD="claude || codex exec --sandbox workspace-write"`. A bare
+  `LUCID_DREAM_CMD="claude || codex"`. A bare
   `claude` keeps the built-in tool limits. Tried with Claude Code and with
   the Codex CLI (which runs on a ChatGPT subscription).
 - Inbox notes the agent leaves behind are archived by the program, so an
@@ -527,7 +534,7 @@ lucid-dream serve --root <memory dir> --dream-at 03:00
 
 - If the machine was off or asleep at that time, it dreams when the server is
   next running. A dream you run by hand after that time counts as the day's.
-- `--dream-with "codex exec --sandbox workspace-write"` chooses the agent for
+- `--dream-with codex` chooses the agent for
   the server's dreams, the same as `LUCID_DREAM_CMD`.
 - Any agent can start one with the `dream` tool ("tidy the memory now"), and
   ask how the last one went with `status`. So a cloud routine of Grok's or
