@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 (2026-11-12)
+
+- `setup` creates its temp and backup files owner-only from the start,
+  never writing the token into a file that already existed with a looser mode.
+
 ## 0.4.1 (2026-11-12)
 
 - `setup` writes the settings file and its backup readable by their owner

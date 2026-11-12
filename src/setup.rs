@@ -139,34 +139,39 @@ fn write_settings(file: &Path, merged: &Value) -> Result<(), String> {
     if let Some(dir) = file.parent() {
         fs::create_dir_all(dir).map_err(io)?;
     }
+    // Both files hold this device's token, so only their owner may read them.
     if file.exists() {
         let backup = file.with_extension("json.bak-before-lucid-setup");
-        if !backup.exists() {
-            fs::copy(file, &backup).map_err(io)?;
+        if backup.exists() {
             owner_only(&backup);
+        } else {
+            create_private(&backup, &fs::read(file).map_err(io)?).map_err(io)?;
             println!("  backup: {}", backup.display());
         }
     }
     let mut text = serde_json::to_string_pretty(merged).map_err(|e| e.to_string())?;
     text.push('\n');
     // Write beside the file and rename, so a crash cannot leave half a file.
-    // The file holds this device's token, so only its owner may read it.
     let temp = file.with_extension("json.lucid-tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut out = options.open(&temp).map_err(io)?;
-    std::io::Write::write_all(&mut out, text.as_bytes()).map_err(io)?;
-    out.sync_all().map_err(io)?;
-    drop(out);
-    // A leftover temp file from an earlier run keeps the mode it had.
-    owner_only(&temp);
+    let _ = fs::remove_file(&temp);
+    create_private(&temp, text.as_bytes()).map_err(io)?;
     fs::rename(&temp, file).map_err(io)
 }
 
-/// Let only the file's owner read it. On Windows the user profile's own
-/// access rules already do this.
+/// Create a file that only its owner can read, and fill it. It fails if the
+/// file exists, so nothing is ever written into a file made with a looser
+/// mode. On Windows the user profile's own access rules do the restricting.
+fn create_private(file: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut out = options.open(file)?;
+    std::io::Write::write_all(&mut out, contents)?;
+    out.sync_all()
+}
+
+/// Tighten a file that already exists.
 fn owner_only(file: &Path) {
     #[cfg(unix)]
     {
