@@ -500,6 +500,12 @@ The file is not encrypted, and tokens are not in it.
 - The agent is `claude -p` with edits allowed and only `git mv` and `mkdir` as
   commands. It runs on your Claude subscription; no API key is needed. Set
   `LUCID_DREAM_CMD` to use another one; the prompt is appended.
+- It asks Claude Code for Sonnet, not for whatever model your own sessions
+  use: merging notes every night does not need the largest one.
+  `--dream-model haiku` (or `LUCID_DREAM_MODEL`) picks another, a full model
+  name works too, and `default` leaves it to Claude Code. If the machine's
+  Claude Code does not take the model asked for, its own default is tried.
+  Only Sonnet as an alias was checked against the command's shape, not run.
 - List several agents with `||` and dream tries them in order, so a night when
   one is out of quota still gets its dream:
   `LUCID_DREAM_CMD="claude || codex exec --sandbox workspace-write"`. A bare
@@ -568,6 +574,7 @@ the server.
 | Variable | Used by | Meaning |
 | --- | --- | --- |
 | `LUCID_ROOT` | serve, dream, token, import | Memory store, instead of `--root` |
+| `LUCID_DREAM_MODEL` | serve, dream | Claude model for the dream: `sonnet` (default), `haiku`, `opus`, a full name, or `default` |
 | `LUCID_BIND` | serve | Listen address (default `127.0.0.1:7878`) |
 | `LUCID_URL` | hooks, import | Server endpoint, e.g. `http://<pc-name>:7878/mcp` |
 | `LUCID_TOKEN` | hooks, import | This device's agent token |

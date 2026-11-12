@@ -411,40 +411,69 @@ type Attempt = (String, Vec<String>, Option<String>);
 /// tried when one fails, e.g. `claude || codex exec --sandbox workspace-write`.
 fn commands(today: &str) -> Vec<Attempt> {
     let custom = std::env::var("LUCID_DREAM_CMD").unwrap_or_default();
-    attempts(&custom, today)
+    let model = std::env::var(MODEL_ENV).unwrap_or_default();
+    attempts(&custom, &model, today)
 }
 
-fn attempts(custom: &str, today: &str) -> Vec<Attempt> {
+fn attempts(custom: &str, model: &str, today: &str) -> Vec<Attempt> {
     let prompt = format!("Today is {today}.\n\n{PROMPT}");
+    // The built-in Claude command, on the chosen model first. If Claude Code
+    // on this machine does not take that model, its own default is tried.
+    let built_in = || match claude_model(model) {
+        Some(model) => vec![claude(&prompt, Some(model)), claude(&prompt, None)],
+        None => vec![claude(&prompt, None)],
+    };
     let mut list: Vec<Attempt> = custom
         .split("||")
         .map(str::trim)
         .filter(|c| !c.is_empty())
-        .map(|c| {
+        .flat_map(|c| {
             // A bare `claude` means the built-in command with its tool allowlist.
             if c == "claude" {
-                return claude(&prompt);
+                return built_in();
             }
             let mut parts = c.split_whitespace().map(str::to_string);
             let program = parts.next().unwrap_or_default();
             let mut args: Vec<String> = parts.collect();
             // The prompt is the last argument, as e.g. `codex exec` expects.
             args.push(prompt.clone());
-            (program, args, None)
+            vec![(program, args, None)]
         })
         .collect();
     if list.is_empty() {
-        list.push(claude(&prompt));
+        list = built_in();
     }
     list
 }
 
+/// The model the built-in Claude command asks for when none is set. Merging
+/// notes does not need the largest model, and the dream runs every night.
+pub const DEFAULT_MODEL: &str = "sonnet";
+pub const MODEL_ENV: &str = "LUCID_DREAM_MODEL";
+
+/// The model to pass to Claude Code: an alias (`sonnet`, `haiku`, `opus`) or
+/// a full model name. `default` means leave it to Claude Code's own setting.
+/// Anything that is not a plain model name is ignored, since it becomes a
+/// command-line argument.
+fn claude_model(model: &str) -> Option<&str> {
+    let model = match model.trim() {
+        "" => DEFAULT_MODEL,
+        model => model,
+    };
+    let plain = model
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '[' | ']'));
+    (model != "default" && plain && !model.starts_with('-')).then_some(model)
+}
+
 /// Claude gets the prompt on stdin, which survives any shell or `.cmd` shim
 /// unchanged, and may only edit files and move them.
-fn claude(prompt: &str) -> Attempt {
-    let mut args: Vec<String> = ["-p", "--permission-mode", "acceptEdits", "--allowedTools"]
-        .map(str::to_string)
-        .into();
+fn claude(prompt: &str, model: Option<&str>) -> Attempt {
+    let mut args: Vec<String> = vec!["-p".to_string()];
+    if let Some(model) = model {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    args.extend(["--permission-mode", "acceptEdits", "--allowedTools"].map(str::to_string));
     args.extend(CLAUDE_TOOLS.map(str::to_string));
     ("claude".to_string(), args, Some(prompt.to_string()))
 }
@@ -603,9 +632,22 @@ mod tests {
 
     #[test]
     fn the_default_agent_gets_the_dated_prompt_and_a_tool_allowlist() {
-        let list = attempts("", "2026-11-11");
-        assert_eq!(list.len(), 1);
-        let (program, args, stdin) = list.into_iter().next().unwrap();
+        // Sonnet first; then whatever Claude Code on the machine defaults to.
+        let list = attempts("", "", "2026-11-11");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].1[..3], ["-p", "--model", "sonnet"]);
+        assert!(!list[1].1.contains(&"--model".to_string()));
+        assert_eq!(
+            attempts("", "haiku", "d")[0].1[..3],
+            ["-p", "--model", "haiku"]
+        );
+        // `default`, or something that is not a model name, asks for no model.
+        for unset in ["default", "--dangerously-skip-permissions", "a b", "x;y"] {
+            let list = attempts("", unset, "d");
+            assert_eq!(list.len(), 1, "{unset}");
+            assert!(!list[0].1.contains(&"--model".to_string()), "{unset}");
+        }
+        let (program, args, stdin) = list.into_iter().nth(1).unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args[0], "-p");
         assert!(stdin
@@ -618,7 +660,11 @@ mod tests {
 
     #[test]
     fn a_list_of_agents_is_tried_in_order() {
-        let list = attempts("claude || codex exec -s workspace-write ||", "2026-11-11");
+        let list = attempts(
+            "claude || codex exec -s workspace-write ||",
+            "default",
+            "2026-11-11",
+        );
         assert_eq!(list.len(), 2);
         // The bare name keeps Claude's allowlist and stdin prompt.
         assert!(list[0].1.contains(&"--allowedTools".to_string()) && list[0].2.is_some());
@@ -655,6 +701,7 @@ mod tests {
         let good = script("good.sh", "echo dreamt > notes/dreamt.md");
         let list = attempts(
             &format!("{bad} || missing-agent-xyz || {good}"),
+            "default",
             "2026-11-11",
         );
         first_success(&list, &store).unwrap();
@@ -664,7 +711,7 @@ mod tests {
         );
         assert!(store.join("notes/dreamt.md").exists());
 
-        let failed = first_success(&attempts(&bad, "2026-11-11"), &store).unwrap_err();
+        let failed = first_success(&attempts(&bad, "default", "2026-11-11"), &store).unwrap_err();
         assert!(failed.contains("memory left as it was"), "{failed}");
         assert_eq!(
             fs::read_to_string(store.join("notes/keep.md")).unwrap(),

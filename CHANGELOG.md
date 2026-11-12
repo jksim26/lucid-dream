@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.0 (2026-11-12)
+
+- The dream asks Claude Code for Sonnet instead of running on whatever
+  model the machine's own sessions default to. `--dream-model` on `serve`
+  and `dream`, or `LUCID_DREAM_MODEL`, picks another (`haiku`, `opus`, a full
+  model name); `default` leaves it to Claude Code. If the model asked for is
+  refused, Claude Code's own default is tried next.
+
 ## 0.13.1 (2026-11-12)
 
 - `read` takes `from_line` and `lines`, so a file too large to read whole,
