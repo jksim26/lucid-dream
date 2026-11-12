@@ -79,6 +79,8 @@ fn initialize(params: &Value) -> Value {
 fn tools() -> Value {
     let read_only = json!({ "readOnlyHint": true });
     let add_only = json!({ "readOnlyHint": false, "destructiveHint": false });
+    // Dream rewrites pages (undoable through git), so clients may confirm it.
+    let rewrites = json!({ "readOnlyHint": false, "destructiveHint": true });
     json!([
         {
             "name": "index",
@@ -205,14 +207,14 @@ fn tools() -> Value {
         },
         {
             "name": "dream",
-            "description": "Tidy the shared memory now: start the dream job on the machine that holds the memory, which merges the inbox notes into pages and rebuilds the index. It normally runs by itself every night, so use this only when the user asks for it or a scheduled routine of theirs calls for it. It takes a few minutes and runs in the background: this returns at once, and calling it again with `status` true says how it went. One dream runs at a time.",
+            "description": "Tidy the shared memory now: start the dream job on the machine that holds the memory, which merges the inbox notes into pages and rebuilds the index. It normally runs by itself every night, so use this only when the user asks for it or a scheduled routine of theirs calls for it. It takes a few minutes and runs in the background: this returns at once, and calling it again with `status` true says how it went. One dream runs at a time, and agents may ask for one at most every 30 minutes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "status": { "type": "boolean", "description": "Only report when memory was last tidied and whether that worked; start nothing." }
                 }
             },
-            "annotations": add_only,
+            "annotations": rewrites,
         }
     ])
 }

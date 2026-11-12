@@ -97,31 +97,51 @@ fn plain(root: &Path) -> std::path::PathBuf {
     }
 }
 
-/// Dream once, with nothing else dreaming at the same time, and record how
-/// it went. `by` says what started it.
-pub fn run_recorded(root: &Path, by: &str) -> Result<String, String> {
-    let root = &plain(root);
+/// Take the dream lock, or say why not. Only one thread of this process is
+/// ever in here, and the file is made with `create_new`, so two dreams
+/// cannot both get it. A lock is cleared only once it is stale: its dream
+/// hung, or the machine went down in the middle of it.
+fn acquire(root: &Path) -> Result<i64, String> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _gate = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let now = crate::util::unix_now();
-    if let Some(since) = running_since(root) {
-        return Err(format!(
-            "a dream is already running (started {} min ago)",
-            (now - since) / 60
-        ));
-    }
     let lock = lock_file(root);
     if let Some(dir) = lock.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    // A stale lock, from a dream that never finished, is replaced.
+    let busy = |since: i64| {
+        format!(
+            "a dream is already running (started {} min ago)",
+            (now - since) / 60
+        )
+    };
+    if let Some(since) = running_since(root) {
+        return Err(busy(since));
+    }
+    // Here the lock is absent or stale. Removing a stale one is safe: its
+    // owner is gone. If another process takes the lock between this line and
+    // the next, `create_new` fails and that dream keeps it.
     let _ = fs::remove_file(&lock);
-    fs::OpenOptions::new()
+    match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&lock)
-        .and_then(|mut f| f.write_all(now.to_string().as_bytes()))
-        .map_err(|e| format!("a dream is already starting ({e})"))?;
+    {
+        Ok(mut file) => {
+            file.write_all(now.to_string().as_bytes())
+                .map_err(|e| format!("cannot write the dream lock: {e}"))?;
+            Ok(now)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(busy(now)),
+        Err(e) => Err(format!("cannot take the dream lock: {e}")),
+    }
+}
+
+/// Dream with the lock already held since `started`, record how it went, and
+/// give the lock back.
+fn run_locked(root: &Path, by: &str, started: i64) -> Result<String, String> {
     let mut status = Status {
-        started: now,
+        started,
         finished: 0,
         ok: false,
         message: String::new(),
@@ -129,7 +149,7 @@ pub fn run_recorded(root: &Path, by: &str) -> Result<String, String> {
     };
     record(root, &status);
     let outcome = dream(root, false);
-    let _ = fs::remove_file(&lock);
+    let _ = fs::remove_file(lock_file(root));
     status.finished = crate::util::unix_now();
     status.ok = outcome.is_ok();
     status.message = match &outcome {
@@ -138,6 +158,14 @@ pub fn run_recorded(root: &Path, by: &str) -> Result<String, String> {
     };
     record(root, &status);
     outcome
+}
+
+/// Dream once, with nothing else dreaming at the same time, and record how
+/// it went. `by` says what started it.
+pub fn run_recorded(root: &Path, by: &str) -> Result<String, String> {
+    let root = &plain(root);
+    let started = acquire(root)?;
+    run_locked(root, by, started)
 }
 
 /// One line on when memory was last tidied, for people and agents.
@@ -167,16 +195,28 @@ pub fn describe(root: &Path) -> String {
     }
 }
 
-/// Start a dream without waiting for it; it takes minutes.
+/// An agent may ask for a dream this often. A dream spends the user's quota,
+/// and any connected agent can ask, so one that asks in a loop is refused.
+const ASKED_GAP_SECS: i64 = 30 * 60;
+
+/// Start a dream because an agent asked, without waiting for it; it takes
+/// minutes. The lock is taken before this returns, so "started" is true.
 pub fn start_in_background(root: &Path, by: &str) -> Result<(), String> {
-    if let Some(since) = running_since(root) {
-        return Err(format!(
-            "a dream is already running (started {} min ago)",
-            (crate::util::unix_now() - since) / 60
-        ));
+    let root = plain(root);
+    if let Some(last) = status(&root) {
+        let ago = crate::util::unix_now() - last.started;
+        if last.by != "hand" && last.by != "timer" && (0..ASKED_GAP_SECS).contains(&ago) {
+            return Err(format!(
+                "an agent already asked for a dream {} min ago; wait {} min, or the user can \
+                 run `lucid-dream dream` by hand",
+                ago / 60,
+                (ASKED_GAP_SECS - ago) / 60 + 1
+            ));
+        }
     }
-    let (root, by) = (root.to_path_buf(), by.to_string());
-    std::thread::spawn(move || match run_recorded(&root, &by) {
+    let started = acquire(&root)?;
+    let by = by.to_string();
+    std::thread::spawn(move || match run_locked(&root, &by, started) {
         Ok(summary) => eprintln!("lucid-dream: dream started by {by}: {summary}"),
         Err(e) => eprintln!("lucid-dream: dream started by {by} failed: {e}"),
     });
@@ -650,10 +690,24 @@ mod tests {
             .unwrap_err()
             .contains("already running"));
         assert!(start_in_background(&store, "grok").is_err());
+        // A fresh lock is never removed by someone who was refused.
+        assert!(lock_file(&store).exists());
         fs::write(lock_file(&store), "1000").unwrap();
         run_recorded(&store, "timer").unwrap();
         assert_eq!(status(&store).unwrap().by, "timer");
         assert!(!lock_file(&store).exists());
+
+        // An agent may ask, but not again right away; by hand always works.
+        start_in_background(&store, "grok").unwrap();
+        for _ in 0..200 {
+            if status(&store).is_some_and(|s| s.by == "grok" && s.finished > 0) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let again = start_in_background(&store, "chatgpt").unwrap_err();
+        assert!(again.contains("already asked"), "{again}");
+        run_recorded(&store, "hand").unwrap();
     }
 
     #[test]

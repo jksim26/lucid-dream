@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 (2026-11-12)
+
+- The dream lock is taken atomically and a running dream's lock is never
+  removed, so two dreams cannot overlap; "dream started" is only said once
+  the lock is held.
+- Agents may ask for a dream at most every 30 minutes, and the `dream` tool
+  is marked as one that rewrites, so clients can confirm it.
+
 ## 0.8.0 (2026-11-12)
 
 - `serve --dream-at 03:00` makes the server tidy the memory itself every
