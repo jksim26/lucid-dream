@@ -82,8 +82,9 @@ On ChatGPT web or desktop, paste this, filling in the address:
 > - `remember` (`text`, string; `said_by`, optional, only ever "user"; `topic`,
 >   optional string): saves a note.
 > - `send` (`to`, string: claude, grok, codex or all; `text`, string; `session`,
->   optional string, a session number from `who`): leaves a message for another
->   agent, or for one of its sessions.
+>   optional string: a session number from `who`, several such as "1,3", or
+>   "all"; `re`, optional string, the path of the message being answered):
+>   leaves a message for another agent. Without `session`, one session gets it.
 > - `who` (no arguments): lists the agents and their sessions.
 > - `messages` (no arguments): returns unread messages from other agents.
 >

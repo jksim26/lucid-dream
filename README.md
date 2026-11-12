@@ -115,8 +115,6 @@ Where lucid-dream is behind, so you know before you install it:
 - Search scans the Markdown files; there is no index, no entities, no vectors.
 - Dream needs an agent CLI you are logged in to (Claude Code or Codex). With
   none, memory still works but nobody tidies it.
-- A message without a session number can be picked up by any listening
-  session of that agent; there is no claim-once handoff yet.
 - Only Claude Code sessions and agents with a webhook are woken. The phone
   apps and ChatGPT read messages when you ask them to.
 - It is built for one person. There are no teams, roles or audit log.
@@ -308,8 +306,22 @@ claude: reads messages when it next looks
 grok: woken by webhook
 ```
 
-`send` with `session: "2"` reaches that session only; without it, every
-session of that agent gets the message. A message reaches a listening session within a second. A session counts as listening while its
+`send` reaches exactly one session unless you ask for more:
+
+| `session` | Who gets the message |
+| --- | --- |
+| left out | One session: the one being replied to (`re`), otherwise the lowest-numbered one that is listening. The sender is told which. |
+| `"2"` | That session only |
+| `"1,3"` | Those sessions |
+| `"all"` | Every session of that agent |
+
+If no session of the agent is around, the message waits for the first one
+that looks. If the server picked a session and it ends before reading the
+message, any session of that agent may read it. A sender that has a number
+of its own passes it as `from_session`, which is how a reply finds its way
+back to the session that asked.
+
+A message reaches a listening session within a second. A session counts as listening while its
 waiting hook or channel helper has checked in within the last 90 seconds. A
 session that ends leaves the list at once; one that just goes quiet shows as
 "not listening" with when it was last seen, and drops off after three days. Its

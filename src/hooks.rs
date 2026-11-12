@@ -93,7 +93,9 @@ pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
              the start of this session's title, followed by its topic (for example \
              \"#{number} Login bug\"): if you have a tool that sets this session's own title, \
              set it once the topic is clear and again if the number goes missing; if you have \
-             none, do nothing. Tell the user the number if they ask which session this is."
+             none, do nothing. Tell the user the number if they ask which session this is. When \
+             you `send` a message, pass `from_session` \"{number}\" so the reply comes back \
+             to this session."
         );
         ask["session"] = json!(number);
     }

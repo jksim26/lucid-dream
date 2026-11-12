@@ -374,9 +374,54 @@ pub struct Message {
     pub to: String,
     pub at: String,
     pub re: Option<String>,
-    /// Set when the message is for one session of the recipient, not all of them.
+    /// Set when the message is for one session of the recipient (or several,
+    /// separated by commas), not all of them.
     pub session: Option<String>,
+    /// True when the server chose that session because the sender named
+    /// none. If the session has ended since, any session may read it.
+    pub picked: bool,
+    /// The sender's own session, so a reply can come back to it.
+    pub from_session: Option<String>,
     pub text: String,
+}
+
+/// Which sessions of the recipient a message is for.
+pub enum Audience {
+    /// The sender named none: the server picks one.
+    Pick,
+    /// These session numbers.
+    Sessions(Vec<String>),
+    /// Every session of the recipient.
+    Every,
+}
+
+impl Audience {
+    /// From the `session` argument of `send`: nothing, "all", or numbers
+    /// such as "3", "#3" or "1,3".
+    pub fn parse(raw: Option<&str>) -> Audience {
+        let raw = raw.unwrap_or("").trim();
+        if raw.eq_ignore_ascii_case("all") {
+            return Audience::Every;
+        }
+        let sessions: Vec<String> = raw
+            .split([',', ';', ' '])
+            .map(label)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if sessions.is_empty() {
+            Audience::Pick
+        } else {
+            Audience::Sessions(sessions)
+        }
+    }
+}
+
+/// What `send_for` did: where the message is, and which sessions it is for
+/// (none means every session), chosen by the server when `picked`.
+pub struct Sent {
+    pub path: String,
+    pub sessions: Vec<String>,
+    pub picked: bool,
 }
 
 /// A session that has announced itself: which agent, what it calls itself,
@@ -418,6 +463,8 @@ fn parse_message(path: String, body: &str) -> Option<Message> {
         at: get("at").unwrap_or_default(),
         re: get("re"),
         session: get("session"),
+        picked: get("picked").as_deref() == Some("true"),
+        from_session: get("from_session"),
         text: text.trim().to_string(),
     })
 }
@@ -437,7 +484,9 @@ impl Store {
         self.send_to(from, to, None, text, re, now)
     }
 
-    /// Like `send`, optionally for one named session of the recipient.
+    /// Like `send`, optionally for one named session of the recipient; with
+    /// none named, every session of the recipient may read it.
+    #[cfg(test)]
     pub fn send_to(
         &self,
         from: &str,
@@ -447,6 +496,49 @@ impl Store {
         re: Option<&str>,
         now: &Utc,
     ) -> Result<String, StoreError> {
+        let audience = match session {
+            Some(session) => Audience::Sessions(vec![label(session)]),
+            None => Audience::Every,
+        };
+        self.send_for(from, None, to, audience, text, re, now)
+            .map(|sent| sent.path)
+    }
+
+    /// The one session of `to` that should get a message whose sender named
+    /// none: the session being replied to if it is still around, else the
+    /// lowest-numbered session that is listening right now.
+    fn pick_session(&self, to: &str, re: Option<&str>, now: i64) -> Option<String> {
+        let sessions: Vec<Presence> = self
+            .who(now)
+            .into_iter()
+            .filter(|p| p.agent == to)
+            .collect();
+        let asked = re
+            .and_then(|path| self.read(path).ok())
+            .and_then(|body| parse_message(String::new(), &body))
+            .filter(|original| original.from == to)
+            .and_then(|original| original.from_session);
+        if let Some(asked) = asked {
+            if sessions.iter().any(|p| p.session == asked) {
+                return Some(asked);
+            }
+        }
+        sessions.into_iter().find(|p| p.live).map(|p| p.session)
+    }
+
+    /// Leave a message for `to`. `from_session` is the sender's own session
+    /// number, if it has one, so that a reply finds its way back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_for(
+        &self,
+        from: &str,
+        from_session: Option<&str>,
+        to: &str,
+        audience: Audience,
+        text: &str,
+        re: Option<&str>,
+        now: &Utc,
+    ) -> Result<Sent, StoreError> {
         check_name("sender", from)?;
         check_name("recipient", to)?;
         if from == to {
@@ -455,13 +547,29 @@ impl Store {
             ));
         }
         let text = check_text(text)?;
+        let (sessions, picked) = match audience {
+            Audience::Every => (Vec::new(), false),
+            Audience::Sessions(sessions) => (sessions, false),
+            // A message to every agent goes to every session of each.
+            Audience::Pick if to == EVERYONE => (Vec::new(), false),
+            Audience::Pick => match self.pick_session(to, re, crate::util::unix_now()) {
+                Some(session) => (vec![session], true),
+                None => (Vec::new(), false),
+            },
+        };
         let hash = &sha256_hex(text.as_bytes())[..8];
         let mut body = format!("---\nfrom: {from}\nto: {to}\nat: {}\n", now.iso());
         if let Some(re) = re.map(field).filter(|v| !v.is_empty()) {
             body.push_str(&format!("re: {re}\n"));
         }
-        if let Some(session) = session.map(label).filter(|v| !v.is_empty()) {
-            body.push_str(&format!("session: {session}\n"));
+        if let Some(mine) = from_session.map(label).filter(|v| !v.is_empty()) {
+            body.push_str(&format!("from_session: {mine}\n"));
+        }
+        if !sessions.is_empty() {
+            body.push_str(&format!("session: {}\n", sessions.join(",")));
+        }
+        if picked {
+            body.push_str("picked: true\n");
         }
         body.push_str(&format!("---\n\n{text}\n"));
         let rel = format!("messages/{}/{}-{from}-{hash}.md", now.date(), now.compact());
@@ -469,7 +577,11 @@ impl Store {
         // Every listener, in this process or in a door's, watches this file
         // to learn at once that there is something to fetch.
         let _ = fs::write(self.sent_marker(), &rel);
-        Ok(rel)
+        Ok(Sent {
+            path: rel,
+            sessions,
+            picked,
+        })
     }
 
     /// The file that changes whenever a message is sent.
@@ -512,6 +624,13 @@ impl Store {
         let seen_text = fs::read_to_string(&seen_file).unwrap_or_default();
         let seen: std::collections::HashSet<&str> = seen_text.lines().collect();
 
+        let around: std::collections::HashSet<String> = self
+            .who(crate::util::unix_now())
+            .into_iter()
+            .filter(|p| p.agent == who)
+            .map(|p| p.session)
+            .collect();
+
         let mut files = Vec::new();
         self.walk(&dir, &mut files)?;
         files.sort();
@@ -529,10 +648,15 @@ impl Store {
                 continue;
             };
             let addressed = message.from != who && (message.to == who || message.to == EVERYONE);
+            // A session the server picked may have ended before it read the
+            // message; then the message is anyone's.
+            let orphaned = |wanted: &str| message.picked && !around.contains(wanted);
             let for_this_session = match (&message.session, session) {
                 (None, _) => true,
-                (Some(wanted), Some(mine)) => wanted == mine,
-                (Some(_), None) => include_seen,
+                (Some(wanted), Some(mine)) => {
+                    wanted.split(',').any(|w| w == mine) || orphaned(wanted)
+                }
+                (Some(wanted), None) => include_seen || orphaned(wanted),
             };
             if addressed && for_this_session {
                 found.push((message, was_seen));
@@ -800,6 +924,119 @@ mod message_tests {
                 .as_deref(),
             Some("trade")
         );
+    }
+
+    fn around(s: &Store, agent: &str, id: &str, live: bool) -> String {
+        s.check_in(&Presence {
+            agent: agent.into(),
+            id: id.into(),
+            session: "x".into(),
+            title: String::new(),
+            device: "mac".into(),
+            project: "/x".into(),
+            live,
+            at: crate::util::unix_now(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_message_with_no_session_named_goes_to_one_listening_session() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::now();
+        // Three Claude sessions: #1 is not listening, #2 and #3 are.
+        assert_eq!(around(&s, "claude", "a", false), "1");
+        assert_eq!(around(&s, "claude", "b", true), "2");
+        assert_eq!(around(&s, "claude", "c", true), "3");
+        let unread = |session: &str| {
+            s.messages_for("claude", Some(session), false, false)
+                .unwrap()
+                .len()
+        };
+
+        let sent = s
+            .send_for("grok", None, "claude", Audience::Pick, "one", None, &now)
+            .unwrap();
+        assert_eq!(
+            (sent.sessions.as_slice(), sent.picked),
+            (&["2".to_string()][..], true)
+        );
+        assert_eq!((unread("1"), unread("2"), unread("3")), (0, 1, 0));
+
+        // Several on request, or every session.
+        let some = Audience::parse(Some("#1, 3"));
+        s.send_for("grok", None, "claude", some, "two", None, &now)
+            .unwrap();
+        assert_eq!((unread("1"), unread("2"), unread("3")), (1, 1, 1));
+        let every = Audience::parse(Some("ALL"));
+        let sent = s
+            .send_for("grok", None, "claude", every, "three", None, &now)
+            .unwrap();
+        assert!(sent.sessions.is_empty() && !sent.picked);
+        assert_eq!((unread("1"), unread("2"), unread("3")), (2, 2, 2));
+
+        // The picked session ends before reading: the message is anyone's.
+        s.check_out("claude", "b").unwrap();
+        assert_eq!((unread("1"), unread("3")), (3, 3));
+
+        // An agent with no sessions around gets it unaddressed, as before.
+        let sent = s
+            .send_for("claude", None, "grok", Audience::Pick, "hi", None, &now)
+            .unwrap();
+        assert!(sent.sessions.is_empty() && !sent.picked);
+        assert_eq!(s.messages("grok", false, false).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_reply_comes_back_to_the_session_that_asked() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::now();
+        assert_eq!(around(&s, "claude", "a", true), "1");
+        assert_eq!(around(&s, "claude", "b", true), "2");
+        // Session 2 asks Grok something and says who is asking.
+        let asked = s
+            .send_for(
+                "claude",
+                Some("#2"),
+                "grok",
+                Audience::Pick,
+                "tests?",
+                None,
+                &now,
+            )
+            .unwrap();
+        let reply = s
+            .send_for(
+                "grok",
+                None,
+                "claude",
+                Audience::Pick,
+                "green",
+                Some(&asked.path),
+                &now,
+            )
+            .unwrap();
+        assert_eq!(reply.sessions, ["2"]);
+        // Without `re`, or once the asker is gone, a listening session gets it.
+        let other = s
+            .send_for("grok", None, "claude", Audience::Pick, "fyi", None, &now)
+            .unwrap();
+        assert_eq!(other.sessions, ["1"]);
+        s.check_out("claude", "b").unwrap();
+        let late = s
+            .send_for(
+                "grok",
+                None,
+                "claude",
+                Audience::Pick,
+                "late",
+                Some(&asked.path),
+                &now,
+            )
+            .unwrap();
+        assert_eq!(late.sessions, ["1"]);
     }
 
     #[test]

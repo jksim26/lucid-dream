@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::store::{Log, Note, Presence, Remembered, Store, StoreError, EVERYONE, INDEX};
+use crate::store::{Audience, Log, Note, Presence, Remembered, Store, StoreError, EVERYONE, INDEX};
 use crate::tokens::{self, Tokens};
 use crate::trust;
 use crate::util::{label, unix_now, Utc};
@@ -160,7 +160,8 @@ fn tools() -> Value {
                     "to": { "type": "string", "description": "The agent's name, e.g. claude, codex or grok, or \"all\" for every agent." },
                     "text": { "type": "string" },
                     "re": { "type": "string", "description": "Path of the message this replies to, if any." },
-                    "session": { "type": "string", "description": "Number of one session of that agent, as `who` lists it (such as \"3\"), to reach only that session. Omit to reach the agent wherever it next looks." }
+                    "session": { "type": "string", "description": "Which session of that agent, by its number in `who`: one (\"3\"), several (\"1,3\"), or \"all\" for every session. Omit it and exactly one session gets the message: the one you are replying to if `re` is set, otherwise one that is listening now." },
+                    "from_session": { "type": "string", "description": "Your own session number, if you have one, so that a reply to this message comes back to your session." }
                 },
                 "required": ["to", "text"]
             },
@@ -231,7 +232,7 @@ pub fn who_is_around(store: &Store, me: &str) -> String {
         return "no agents have checked in yet".to_string();
     }
     let mut out = String::from(
-        "Agents on this memory server. Send with `send`; add `session` with a session's number to reach only that one.\n",
+        "Agents on this memory server. Send with `send`. With no `session`, one session of that agent gets the message; name one (\"3\"), several (\"1,3\") or \"all\" to choose.\n",
     );
     for agent in agents {
         let you = if agent == me { " (you)" } else { "" };
@@ -361,28 +362,32 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
                     known.join(", ")
                 )))
             } else {
-                let session = optional("session").map(label).filter(|s| !s.is_empty());
                 store
-                    .send_to(
+                    .send_for(
                         who,
+                        optional("from_session"),
                         &to,
-                        session.as_deref(),
+                        Audience::parse(optional("session")),
                         &body,
                         optional("re"),
                         &Utc::now(),
                     )
-                    .map(|path| {
-                        let to = match &session {
-                            Some(session) => format!("{to} (session {session})"),
-                            None => to.clone(),
+                    .map(|sent| {
+                        let whom = match (sent.sessions.as_slice(), sent.picked) {
+                            // Nobody of that agent announces sessions, or none is around.
+                            ([], _) => to.clone(),
+                            ([one], true) => format!(
+                                "{to} (session {one}, chosen for you: pass `session` to pick \
+                                 another, several as \"1,3\", or \"all\")"
+                            ),
+                            (list, _) => format!("{to} (session {})", list.join(", ")),
                         };
                         // Wake recipients that have a webhook; others read it when they next look.
-                        let woken =
-                            webhook::nudge(store.root(), &required("to").unwrap_or_default(), who);
+                        let woken = webhook::nudge(store.root(), &to, who);
                         if woken.is_empty() {
-                            format!("sent to {to}: {path}")
+                            format!("sent to {whom}: {}", sent.path)
                         } else {
-                            format!("sent to {to}: {path} (woke {})", woken.join(", "))
+                            format!("sent to {whom}: {} (woke {})", sent.path, woken.join(", "))
                         }
                     })
             }

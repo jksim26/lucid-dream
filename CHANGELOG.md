@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 (2026-11-12)
+
+- A message sent with no `session` now goes to exactly one session of that
+  agent instead of all of them: the session being replied to, otherwise the
+  lowest-numbered one listening. `send` says which one it chose.
+- `session` accepts several numbers (`"1,3"`) or `"all"` when more than one
+  session should get the message.
+- `send` takes `from_session`, the sender's own number, so a reply comes back
+  to the session that asked. Claude Code sessions are told to pass it.
+
 ## 0.6.0 (2026-11-12)
 
 - `lucid-dream quickstart <dir> --agents grok,chatgpt,codex` creates the
