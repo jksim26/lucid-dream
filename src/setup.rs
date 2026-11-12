@@ -143,15 +143,38 @@ fn write_settings(file: &Path, merged: &Value) -> Result<(), String> {
         let backup = file.with_extension("json.bak-before-lucid-setup");
         if !backup.exists() {
             fs::copy(file, &backup).map_err(io)?;
+            owner_only(&backup);
             println!("  backup: {}", backup.display());
         }
     }
     let mut text = serde_json::to_string_pretty(merged).map_err(|e| e.to_string())?;
     text.push('\n');
     // Write beside the file and rename, so a crash cannot leave half a file.
+    // The file holds this device's token, so only its owner may read it.
     let temp = file.with_extension("json.lucid-tmp");
-    fs::write(&temp, text).map_err(io)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut out = options.open(&temp).map_err(io)?;
+    std::io::Write::write_all(&mut out, text.as_bytes()).map_err(io)?;
+    out.sync_all().map_err(io)?;
+    drop(out);
+    // A leftover temp file from an earlier run keeps the mode it had.
+    owner_only(&temp);
     fs::rename(&temp, file).map_err(io)
+}
+
+/// Let only the file's owner read it. On Windows the user profile's own
+/// access rules already do this.
+fn owner_only(file: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(file, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = file;
 }
 
 /// Register the MCP server so Claude can use the memory tools in a session.

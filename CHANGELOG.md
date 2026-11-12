@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 (2026-11-12)
+
+- `setup` writes the settings file and its backup readable by their owner
+  only, since they hold the device's token.
+
 ## 0.4.0 (2026-11-12)
 
 - `lucid-dream setup` connects Claude Code in one step: hooks, wake-ups and
