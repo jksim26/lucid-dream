@@ -1,5 +1,6 @@
 //! lucid-dream: one shared memory that every agent reads and dream tidies.
 
+mod channel;
 mod client;
 mod dream;
 mod hooks;
@@ -10,6 +11,7 @@ mod mcp;
 mod store;
 mod tokens;
 mod util;
+mod webhook;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Write};
@@ -41,11 +43,19 @@ On the machine that holds the memory:
                                                 a door: accepts that one token only
   lucid-dream serve --root <dir> --stdio [--as <agent>]
   lucid-dream dream --root <dir> [--dry-run]    consolidate the inbox and commit
+  lucid-dream webhook set <agent> --url URL --root <dir>
+                                                wake that agent when it gets a message;
+                                                its Authorization value is read from
+                                                LUCID_WEBHOOK_AUTH, never the command line
+  lucid-dream webhook test|remove <agent> --root <dir>
+  lucid-dream webhook list --root <dir>
 
 On any device:
   lucid-dream hook session-start [--url URL]    print the memory index (Claude Code hook)
   lucid-dream hook stop [--url URL]             send a session summary (Claude Code hook)
   lucid-dream import <path>... [--said-by WHO] (--root <dir> | --url URL)
+  lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
+                                                into a running session (research preview)
 
 Environment:
   LUCID_ROOT       memory store, instead of --root
@@ -83,6 +93,8 @@ fn main() -> ExitCode {
         "serve" => cmd_serve(raw),
         "dream" => cmd_dream(raw),
         "import" => cmd_import(raw),
+        "webhook" => cmd_webhook(raw),
+        "channel" => cmd_channel(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
     match result {
@@ -285,6 +297,66 @@ fn cmd_import(raw: Vec<String>) -> Result<(), String> {
         report.added, report.duplicates, report.skipped
     );
     Ok(())
+}
+
+fn cmd_channel(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--url"], &[])?;
+    let client = Client::from_env(args.option("--url"), HOOK_TIMEOUT)?;
+    let seconds = env("LUCID_CHANNEL_POLL")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(20);
+    channel::run(client, Duration::from_secs(seconds.max(2))).map_err(|e| format!("channel: {e}"))
+}
+
+fn cmd_webhook(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root", "--url"], &[])?;
+    let file = webhook::path(args.store()?.root());
+    let words: Vec<&str> = args.words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["set", agent] => {
+            let url = args.option("--url").ok_or("webhook set needs --url")?;
+            let authorization = env("LUCID_WEBHOOK_AUTH");
+            let with = if authorization.is_some() {
+                "with"
+            } else {
+                "without"
+            };
+            webhook::set(&file, agent, &url, authorization)?;
+            println!(
+                "{agent} will be woken when it gets a message ({with} an Authorization value)"
+            );
+            Ok(())
+        }
+        ["test", agent] => {
+            let hooks = webhook::load(&file);
+            let hook = hooks.get(*agent).ok_or(format!("no webhook for {agent}"))?;
+            let status = webhook::post(hook, &webhook::payload(agent, "lucid-dream-test"))?;
+            println!("webhook for {agent} answered {status}");
+            Ok(())
+        }
+        ["remove", agent] => {
+            if webhook::remove(&file, agent)? {
+                println!("removed the webhook for {agent}");
+                Ok(())
+            } else {
+                Err(format!("no webhook for {agent}"))
+            }
+        }
+        ["list"] => {
+            for (agent, hook) in webhook::load(&file) {
+                // The address is a secret: show only which service it points at.
+                let host = hook.url.split('/').nth(2).unwrap_or("?");
+                let auth = if hook.authorization.is_some() {
+                    "with"
+                } else {
+                    "no"
+                };
+                println!("{agent}  {host}  ({auth} Authorization)");
+            }
+            Ok(())
+        }
+        _ => Err("usage: lucid-dream webhook set|test|remove <agent> | webhook list".into()),
+    }
 }
 
 fn hook(raw: Vec<String>) -> Result<(), String> {

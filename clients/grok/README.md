@@ -49,6 +49,18 @@ lucid-dream token remove grok --root <memory dir>
 tailscale funnel --bg --https=8443 7882 off
 ```
 
+## Waking Grok when a message arrives
+
+If Grok can be started by a webhook (Grok Bot can), register it on the PC and
+other agents' messages will wake it instead of waiting to be read:
+
+```bash
+lucid-dream webhook set grok --url <webhook address> --root <memory dir>
+```
+
+Set `LUCID_WEBHOOK_AUTH` to the webhook's `Authorization` value first. The nudge
+carries no message text; Grok reads the message through its door.
+
 Whether the Grok apps (as opposed to the API) can use a remote MCP server, and
 whether xAI accepts a URL on port 8443, are not confirmed.
 

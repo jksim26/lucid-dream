@@ -89,6 +89,53 @@ pub fn valid_name(name: &str) -> bool {
         && !name.starts_with('-')
 }
 
+const SECRET_PREFIXES: [&str; 10] = [
+    "ld_",
+    "crsr_",
+    "sk-",
+    "sk_",
+    "ghp_",
+    "gho_",
+    "github_pat_",
+    "xox",
+    "AKIA",
+    "eyJ",
+];
+
+/// Replace anything that looks like a credential with `[redacted]`, word by
+/// word. Session logs become long-lived memory that every agent can read, so
+/// a token pasted into a chat must not travel with them. This errs towards
+/// hiding too much: a long random-looking word is assumed to be a secret.
+pub fn redact(text: &str) -> String {
+    let is_token_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut after_bearer = false;
+    let mut rest = text;
+    while !rest.is_empty() {
+        // Copy the separators, then judge the next run of token characters.
+        let start = rest.find(is_token_char).unwrap_or(rest.len());
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let end = rest.find(|c| !is_token_char(c)).unwrap_or(rest.len());
+        let run = &rest[..end];
+        rest = &rest[end..];
+        if run.is_empty() {
+            continue;
+        }
+        let known = SECRET_PREFIXES.iter().any(|p| run.starts_with(p)) && run.len() >= 16;
+        let random_looking = run.len() >= 32
+            && run.bytes().any(|b| b.is_ascii_digit())
+            && run.bytes().any(|b| b.is_ascii_alphabetic());
+        out.push_str(if known || random_looking || after_bearer {
+            "[redacted]"
+        } else {
+            run
+        });
+        after_bearer = run.eq_ignore_ascii_case("bearer");
+    }
+    out
+}
+
 /// Run git in `root`, returning stdout or git's error text.
 pub fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
@@ -118,6 +165,34 @@ mod tests {
         assert_eq!(Utc::from_unix(1_700_000_000).iso(), "2023-11-14T22:13:20Z");
         assert_eq!(Utc::from_unix(951_782_400).date(), "2000-02-29");
         assert_eq!(Utc::from_unix(1_700_000_000).compact(), "20231114T221320Z");
+    }
+
+    #[test]
+    fn redacts_credentials_and_leaves_prose_alone() {
+        let hex = "a4e6043401ff3ca5834015ec867ccf1ae2941f9fc7daf3b1fd04311ddd57de6b";
+        assert_eq!(redact(&format!("use crsr_{hex} now")), "use [redacted] now");
+        assert_eq!(
+            redact(&format!("Authorization: Bearer {hex}")),
+            "Authorization: Bearer [redacted]"
+        );
+        assert_eq!(
+            redact("header is Bearer short-one."),
+            "header is Bearer [redacted]."
+        );
+        assert_eq!(
+            redact("token ld_932de123411fe6dc51af, ok"),
+            "token [redacted], ok"
+        );
+        assert_eq!(
+            redact(&format!("key={hex}")),
+            format!("key={hex}").replace(hex, "[redacted]")
+        );
+        let prose = "Fix the login bug in src/store.rs at 2026-11-11T07:00:00Z please";
+        assert_eq!(redact(prose), prose);
+        assert_eq!(
+            redact("commit 0fa71d6 and run 42979147512"),
+            "commit 0fa71d6 and run 42979147512"
+        );
     }
 
     #[test]

@@ -19,6 +19,10 @@ the server on the Windows PC and pointing each agent at it (see the README).
   talk to each other across sessions and devices, not only share memory
 - [x] **9. Doors for cloud clients** (added 2026-11-11): labelled, revocable tokens and
   `serve --only`, so the Claude app and Grok each get their own token and tunnel
+- [x] **10. Wake-ups** (added 2026-11-12): webhook nudges for agents that have one, and a
+  Claude Code channel helper that pushes messages into an open session
+- [x] **11. ChatGPT** (added 2026-11-12): joins through a relay Site that ChatGPT hosts,
+  with its own token, door and tunnel ([clients/chatgpt](../clients/chatgpt))
 
 Not done anywhere yet:
 

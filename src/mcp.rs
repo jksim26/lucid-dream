@@ -6,8 +6,9 @@ use serde_json::{json, Value};
 use crate::store::{Log, Note, Remembered, Store, StoreError, EVERYONE, INDEX};
 use crate::tokens::{self, Tokens};
 use crate::util::Utc;
+use crate::webhook;
 
-const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+pub const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_SEARCH_LIMIT: u64 = 200;
 
@@ -169,7 +170,8 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "all": { "type": "boolean", "description": "Also return recent messages already marked read." },
-                    "peek": { "type": "boolean", "description": "Return unread messages without marking them read." }
+                    "peek": { "type": "boolean", "description": "Return unread messages without marking them read." },
+                    "json": { "type": "boolean", "description": "Return a JSON array instead of text, for programs." }
                 }
             },
             "annotations": add_only,
@@ -269,13 +271,32 @@ fn call_tool(store: &Store, who: &str, params: &Value) -> Result<Value, (i64, St
             } else {
                 store
                     .send(who, &to, &body, optional("re"), &Utc::now())
-                    .map(|path| format!("sent to {to}: {path}"))
+                    .map(|path| {
+                        // Wake recipients that have a webhook; others read it when they next look.
+                        let woken = webhook::nudge(store.root(), &to, who);
+                        if woken.is_empty() {
+                            format!("sent to {to}: {path}")
+                        } else {
+                            format!("sent to {to}: {path} (woke {})", woken.join(", "))
+                        }
+                    })
             }
         }
         "messages" => {
             let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
             let peek = args.get("peek").and_then(Value::as_bool).unwrap_or(false);
+            let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
             store.messages(who, all, !peek).map(|found| {
+                if as_json {
+                    let list: Vec<Value> = found
+                        .iter()
+                        .map(|m| {
+                            json!({ "path": m.path, "from": m.from, "to": m.to, "at": m.at,
+                                    "re": m.re, "text": m.text })
+                        })
+                        .collect();
+                    return Value::Array(list).to_string();
+                }
                 if found.is_empty() {
                     return "no new messages".to_string();
                 }
@@ -490,6 +511,30 @@ mod tests {
             text(&call(&s, "claude", "messages", json!({ "peek": true }))),
             "no new messages"
         );
+    }
+
+    #[test]
+    fn messages_can_come_back_as_json() {
+        let t = Temp::new();
+        let s = t.store();
+        call(
+            &s,
+            "grok",
+            "send",
+            json!({ "to": "claude", "text": "Hello." }),
+        );
+        let reply = call(
+            &s,
+            "claude",
+            "messages",
+            json!({ "peek": true, "json": true }),
+        );
+        let list: Value = serde_json::from_str(text(&reply)).unwrap();
+        assert_eq!(list[0]["from"], "grok");
+        assert_eq!(list[0]["text"], "Hello.");
+        assert!(list[0]["path"].as_str().unwrap().starts_with("messages/"));
+        let none = call(&s, "grok", "messages", json!({ "json": true }));
+        assert_eq!(text(&none), "[]");
     }
 
     #[test]

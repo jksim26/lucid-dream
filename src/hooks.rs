@@ -11,6 +11,7 @@ use std::process::Command;
 use serde_json::{json, Value};
 
 use crate::client::Client;
+use crate::util::redact;
 
 const MAX_PROMPTS: usize = 20;
 const MAX_PROMPT_CHARS: usize = 500;
@@ -116,12 +117,15 @@ fn summarize(prompts: &[String], reply: &str) -> String {
     }
     for prompt in &prompts[skipped..] {
         let one_line = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-        out.push_str(&format!("- {}\n", clip(&one_line, MAX_PROMPT_CHARS)));
+        out.push_str(&format!(
+            "- {}\n",
+            clip(&redact(&one_line), MAX_PROMPT_CHARS)
+        ));
     }
     if !reply.trim().is_empty() {
         out.push_str(&format!(
             "\n## Last reply\n{}\n",
-            clip(reply.trim(), MAX_REPLY_CHARS)
+            clip(&redact(reply.trim()), MAX_REPLY_CHARS)
         ));
     }
     out
@@ -162,6 +166,17 @@ not json
         let (prompts, reply) = read_transcript(TRANSCRIPT);
         assert_eq!(prompts, ["Fix the   login bug", "Use Rust for it"]);
         assert_eq!(reply.as_deref(), Some("Done: fixed in auth.rs."));
+    }
+
+    #[test]
+    fn a_pasted_token_does_not_reach_the_log() {
+        let prompts =
+            vec!["here it is\ncrsr_a4e6043401ff3ca5834015ec867ccf1ae2941f9f thanks".to_string()];
+        let summary = summarize(&prompts, "Stored. Authorization: Bearer abc123def456");
+        assert_eq!(
+            summary,
+            "## Asked\n- here it is [redacted] thanks\n\n## Last reply\nStored. Authorization: Bearer [redacted]\n"
+        );
     }
 
     #[test]

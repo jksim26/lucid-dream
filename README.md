@@ -84,6 +84,7 @@ over stdio instead.
 - Codex: [clients/codex](clients/codex)
 - Claude app on phone, web or desktop: [clients/claude-app](clients/claude-app)
 - Grok: [clients/grok](clients/grok)
+- ChatGPT, through a Site it hosts: [clients/chatgpt](clients/chatgpt)
 
 The server offers eight tools:
 
@@ -98,6 +99,32 @@ The server offers eight tools:
 
 Reads refuse absolute paths, `..`, hidden files and symlinks that leave the
 store. Writes only ever add files to `inbox/`, `logs/` and `messages/`.
+
+## Waking an agent
+
+A message normally waits until its recipient next looks. Two optional pieces
+close that gap.
+
+**Webhook, for an agent that can be woken by one** (set on the PC). When a
+message is sent to that agent, the server calls its webhook. The call says only
+that a message is waiting and from whom, never what it says; the agent reads it
+through its own connection. An agent is nudged at most once every 30 seconds.
+
+```bash
+lucid-dream webhook set grok --url <webhook address> --root <memory dir>
+```
+
+The webhook's `Authorization` value is read from the `LUCID_WEBHOOK_AUTH`
+environment variable, so it never appears on a command line. `webhook test grok`
+sends a test nudge; `webhook list` and `webhook remove grok` manage it. The
+address and its secret are stored in `.lucid/webhooks.json`, outside git.
+
+**Channel, for a Claude Code session that is open** (research preview). The
+`lucid-dream channel` helper pushes new messages into a running session; see
+[clients/claude-code](clients/claude-code#live-messages-channel).
+
+Session logs are scrubbed of anything that looks like a credential before they
+are sent, since logs become memory every agent can read.
 
 ## Tokens and doors
 
@@ -198,6 +225,8 @@ the server.
 | `LUCID_TOKEN` | hooks, import | This device's agent token |
 | `LUCID_DREAM_CMD` | dream | Agent command; the prompt is appended |
 | `LUCID_DEBUG` | hooks | Print why a hook did nothing |
+| `LUCID_WEBHOOK_AUTH` | webhook set | The webhook's `Authorization` value |
+| `LUCID_CHANNEL_POLL` | channel | Seconds between checks (default 20) |
 
 ## Status
 
