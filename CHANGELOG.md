@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.0 (2026-11-13)
+
+- The server now decides when a search may go past working memory. A search
+  that asks for the archive, session logs or messages (`deep`, or a `dir` that
+  reaches them) gets them only when working memory has no match for the same
+  words. Otherwise it returns the working-memory matches and says so.
+- `search` takes a `reason`. With one, the deeper layer is searched even when
+  working memory has matches, and the reason is written with the agent's name
+  to `logs/<date>/deep-searches.log`.
+- Reading a file that a result points to is unchanged and always allowed.
+
 ## 0.15.0 (2026-11-12)
 
 - The dream picks its model by the size of the job: Sonnet for a normal

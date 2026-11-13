@@ -66,7 +66,9 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          - read (path, string; from_line, optional integer; lines, optional integer): reads \
          one memory file, or part of a large one.\n\
          - search (query, string: one or several words separated by commas; deep, optional \
-         boolean: also search the archive, session logs and messages; dir, optional string; \
+         boolean: also search the archive, session logs and messages, which the server allows \
+         only when working memory has no match or a reason is given; reason, optional string: \
+         why working memory is not enough; dir, optional string; \
          limit, optional integer): searches memory.\n\
          - log (summary, string): records a short summary of a finished piece of work.\n\
          - remember (text, string; said_by, optional, only ever \"user\"; topic, optional \

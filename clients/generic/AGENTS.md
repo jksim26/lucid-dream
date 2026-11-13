@@ -11,7 +11,9 @@ program in a shell; each call prints its answer.
 - To look something up, run
   `lucid-dream call search '{"query": "release, deploy, ship"}'`. It matches
   words, not meaning, so give several likely words separated by commas. Add
-  `"deep": true` to include the archive, session logs and messages.
+  `"deep": true` to include the archive, session logs and messages; the server
+  goes there only when working memory has no match for the same words, or
+  when you add a `"reason"` saying why you need the original detail.
 - When you learn something a future session would want (a decision, a
   correction, a preference, a fact about a project), run
   `lucid-dream call remember '{"text": "...", "topic": "..."}'`. Add

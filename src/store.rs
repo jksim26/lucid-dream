@@ -124,6 +124,12 @@ fn check_text(text: &str) -> Result<&str, StoreError> {
 }
 
 /// What a caller who may not see session records is told.
+/// True for a file in the deeper layer: the archive, session logs, messages.
+pub fn is_deep(rel: &str) -> bool {
+    let rel = rel.to_lowercase();
+    DEEP_DIRS.iter().any(|deep| rel.starts_with(deep))
+}
+
 pub const SEALED: &str = "session records are not available through this door; they hold \
 everything a session said and did, so only the user's own machines and trusted agents may read \
 them (the user can allow it with `lucid-dream trust add <agent>`). The session's summary, \
@@ -427,6 +433,37 @@ impl Store {
         Ok(rel)
     }
 
+    /// Note that `who` went past working memory and why, in
+    /// `logs/<date>/deep-searches.log`: one line per search. The file is not
+    /// searchable, so the words searched for never come back as hits.
+    pub fn deep_searched(
+        &self,
+        who: &str,
+        query: &str,
+        reason: &str,
+        now: &Utc,
+    ) -> Result<(), StoreError> {
+        check_name("agent", who)?;
+        let path = self
+            .root
+            .join(format!("logs/{}/deep-searches.log", now.date()));
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let line = format!(
+            "{} {who} searched for \"{}\": {}\n",
+            now.iso(),
+            field(query),
+            field(reason)
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)?
+            .write_all(line.as_bytes())?;
+        Ok(())
+    }
+
     /// Write a file at a path this module built from checked parts.
     fn create(&self, rel: &str, body: &str, replace: bool) -> Result<(), StoreError> {
         let path = self.root.join(rel);
@@ -482,7 +519,7 @@ impl Store {
                 continue;
             }
             let rel = self.rel(&file);
-            if working_only && DEEP_DIRS.iter().any(|deep| rel.starts_with(deep)) {
+            if working_only && is_deep(&rel) {
                 continue;
             }
             // Unreadable or non-UTF-8 files are skipped rather than failing the search.

@@ -13,14 +13,23 @@ pub const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_SEARCH_LIMIT: u64 = 200;
 
+/// What a search gets back when it asked for the deeper layer and was not let in.
+const DEEP_HELD: &str =
+    "Working memory has matches for these words, so the deeper layer (archive, \
+session logs, messages) was not searched. The working-memory matches are below. For the detail \
+behind one, `read` the file it points to. To search deeper anyway, call again with a `reason` \
+saying why working memory is not enough.";
+
 const INSTRUCTIONS: &str = "Shared memory for one person's agents, on every device. It exists \
 so that what any agent learns about the user, their projects and their decisions is there for \
 every other agent tomorrow.\n\n\
 Read: call `index` at the start of a session to load MEMORY.md, `read` the notes or wiki pages \
 it points to, and `search` for anything it does not mention. `search` looks in working memory \
 (the index, notes, wiki pages and notes not yet merged); give it several likely words separated \
-by commas, since it matches words, not meaning. If that finds nothing, search again with \
-`deep` true to include the archive, session logs and messages.\n\n\
+by commas, since it matches words, not meaning. The archive, session logs and \
+messages are a deeper layer: `deep` true reaches them, but only when working memory has no match \
+for the same words, or when you give a `reason` saying why you need the original detail. To get \
+the detail behind a working-memory result, `read` the file it points to; that is always allowed.\n\n\
 Write: call `remember` when you learn something a future session would want: a decision, a \
 correction, a preference, a fact about a project. Use your judgement about what is worth \
 keeping. Set said_by to \"user\" only for something the user themself decided or stated; leave \
@@ -132,8 +141,9 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string" },
-                    "dir": { "type": "string", "description": "Search this folder only, such as wiki or logs. Omit for working memory." },
-                    "deep": { "type": "boolean", "description": "Also search the deeper layer: the archive, session logs and messages. Use it when working memory has no answer or you need the original detail." },
+                    "dir": { "type": "string", "description": "Search this folder only, such as wiki or notes. Omit for working memory. A folder in the deeper layer (archive, logs, messages) follows the same rule as `deep`." },
+                    "deep": { "type": "boolean", "description": "Also search the deeper layer: the archive, session logs and messages. The server looks in working memory first and goes deeper only if that has no match for these words, or if you give a `reason`." },
+                    "reason": { "type": "string", "description": "Why working memory is not enough for this search, in a few words (for example: need the original wording of a decision). It opens the deeper layer even when working memory has matches, and is written to the log." },
                     "limit": { "type": "integer", "description": "Most matches to return (default 50, at most 200)." }
                 },
                 "required": ["query"]
@@ -346,22 +356,42 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                 .unwrap_or(DEFAULT_SEARCH_LIMIT)
                 .clamp(1, MAX_SEARCH_LIMIT) as usize;
             let (dir, deep) = (text("dir"), args.get("deep") == Some(&Value::Bool(true)));
+            let query = required("query")?;
+            let reason = text("reason").trim().to_string();
+            let lines = |hits: &[crate::store::Hit]| {
+                hits.iter()
+                    .map(|h| format!("{}:{}: {}", h.path, h.line, h.text))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             store
-                .search(&required("query")?, &dir, limit, deep, sealed)
-                .map(|hits| {
+                .search(&query, &dir, limit, deep, sealed)
+                .and_then(|hits| {
                     if hits.is_empty() && dir.trim().is_empty() && !deep {
-                        return "no matches in working memory; try other words separated by \
-                                commas, or search again with deep true to include the archive, \
-                                session logs and messages"
-                            .to_string();
+                        return Ok(
+                            "no matches in working memory; try other words separated by \
+                               commas, or search again with deep true to include the archive, \
+                               session logs and messages"
+                                .to_string(),
+                        );
                     }
                     if hits.is_empty() {
-                        return "no matches".to_string();
+                        return Ok("no matches".to_string());
                     }
-                    hits.iter()
-                        .map(|h| format!("{}:{}: {}", h.path, h.line, h.text))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    // The gate: the deeper layer opens only when working memory has
+                    // nothing for the same words, or the agent says why it needs it.
+                    if hits.iter().any(|h| crate::store::is_deep(&h.path)) {
+                        if !reason.is_empty() {
+                            // A search is never lost because its note could not be written.
+                            let _ = store.deep_searched(who, &query, &reason, &Utc::now());
+                        } else {
+                            let working = store.search(&query, "", limit, false, sealed)?;
+                            if !working.is_empty() {
+                                return Ok(format!("{DEEP_HELD}\n\n{}", lines(&working)));
+                            }
+                        }
+                    }
+                    Ok(lines(&hits))
                 })
         }
         "remember" => {
@@ -823,6 +853,58 @@ mod tests {
             false
         );
         assert_eq!(said(through_door("chatgpt", "search", find)), "no matches");
+    }
+
+    #[test]
+    fn the_deeper_layer_opens_only_past_an_empty_working_memory_or_with_a_reason() {
+        let t = Temp::new();
+        let s = t.store();
+        let write = |rel: &str, body: &str| {
+            let path = s.root().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        write("wiki/zoo.md", "The zebra lives in the wiki.\n");
+        write("archive/old.md", "An old zebra and an old okapi.\n");
+        write("logs/2026-01-01/a.md", "A logged zebra.\n");
+        let search = |args: Value| text(&call(&s, "grok", "search", args)).to_string();
+
+        // Working memory answers: asking for deep returns only that, and says so.
+        let held = search(json!({ "query": "zebra", "deep": true }));
+        assert!(held.starts_with("Working memory has matches"));
+        assert!(held.contains("wiki/zoo.md:1:"));
+        assert!(!held.contains("archive/") && !held.contains("logs/"));
+        // Naming a deep folder, however it is spelled, is the same request.
+        for dir in ["archive", "./logs", "."] {
+            let held = search(json!({ "query": "zebra", "dir": dir }));
+            assert!(held.starts_with("Working memory has matches"), "{dir}");
+            assert!(!held.contains("old.md") && !held.contains("a.md"), "{dir}");
+        }
+        // A working folder is searched as before.
+        assert_eq!(
+            search(json!({ "query": "zebra", "dir": "wiki" })),
+            "wiki/zoo.md:1: The zebra lives in the wiki."
+        );
+        // Working memory has nothing for these words: deep runs.
+        let deep = search(json!({ "query": "okapi", "deep": true }));
+        assert!(deep.starts_with("archive/old.md:1:"));
+        // A reason opens it, and is written down with the agent's name.
+        let why = "need the original wording";
+        let deep = search(json!({ "query": "zebra", "deep": true, "reason": why }));
+        assert!(deep.contains("archive/old.md:1:") && deep.contains("wiki/zoo.md:1:"));
+        let day = s.list("logs").unwrap();
+        let noted = day
+            .iter()
+            .find(|e| e.path.ends_with("deep-searches.log"))
+            .expect("the reason is logged");
+        let line = std::fs::read_to_string(s.root().join(&noted.path)).unwrap();
+        assert!(line.contains("grok searched for \"zebra\": need the original wording"));
+        // The note itself never comes back as a hit.
+        let again = search(json!({ "query": "wording", "deep": true }));
+        assert_eq!(again, "no matches");
+        // A blank reason is no reason.
+        let held = search(json!({ "query": "zebra", "deep": true, "reason": "  " }));
+        assert!(held.starts_with("Working memory has matches"));
     }
 
     #[test]

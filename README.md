@@ -200,7 +200,7 @@ Anthropic's [The components of agent memory](https://www.anthropic.com/research/
 | Dreaming, which corrects mistakes and reorganises offline | `lucid-dream dream`, nightly, with the log as the better witness |
 | Memory representations such as a wiki | `wiki/` (one page per project, person, tool) and `notes/`, linked to each other by dream |
 | What is loaded ahead of a session | `MEMORY.md`, the index, kept under 200 lines |
-| Lower layers, read or searched when needed | `search` covers working memory; `deep` adds the archive, logs and messages |
+| Lower layers, read or searched when needed | `search` covers working memory; `deep` adds the archive, logs and messages, and the server allows it only when working memory has no match or the agent gives a reason |
 
 Memory has layers, and only the top one is loaded. The index points to
 pages; pages link to each other and say where the finer detail is; the
@@ -282,7 +282,7 @@ The server offers eleven tools:
 | --- | --- |
 | `index` | Returns `MEMORY.md` |
 | `list`, `read` | Browse the store; `read` takes `from_line` for a file too large to read whole |
-| `search` | Searches working memory for any of several comma-separated words; `deep` adds the archive, logs and messages |
+| `search` | Searches working memory for any of several comma-separated words; `deep` adds the archive, logs and messages when working memory has no match, or with a `reason` |
 | `remember` | Adds a note to `inbox/` for dream to merge |
 | `log` | Records a session summary in `logs/`, or adds to the session's full record |
 | `send` | Leaves a message for another agent, or for `all`; `session` narrows it to one session by number |
