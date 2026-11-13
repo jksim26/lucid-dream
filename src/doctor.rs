@@ -164,11 +164,20 @@ fn this_binary() -> Check {
 
 fn release() -> Check {
     match upgrade::latest() {
-        Ok(latest) if upgrade::newer(&latest, upgrade::CURRENT) => check(
-            Level::Warn,
-            format!("version {latest} is out; run `lucid-dream upgrade`"),
+        Ok(latest) if !upgrade::newer(&latest.version, upgrade::CURRENT) => {
+            check(Level::Ok, "this is the latest release")
+        }
+        Ok(latest) if !latest.ready => check(
+            Level::Ok,
+            format!("version {} {}", latest.version, upgrade::NOT_READY),
         ),
-        Ok(_) => check(Level::Ok, "this is the latest release"),
+        Ok(latest) => check(
+            Level::Warn,
+            format!(
+                "version {} is out; run `lucid-dream upgrade`",
+                latest.version
+            ),
+        ),
         Err(e) => check(
             Level::Warn,
             format!("could not check for a newer release: {e}"),

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.2 (2026-11-13)
+
+- `upgrade` and `doctor` know when a release is minutes old and its files
+  are still being built: they say to try again shortly instead of failing on
+  a missing file or telling you to upgrade to something that is not there.
+- The dream log names the agent and model of each attempt, and which one
+  finished the dream.
+- A search that went into the deeper layer says so on its first line, and why
+  (working memory had no match, or a reason was given).
+
 ## 0.17.1 (2026-11-13)
 
 - The project page that comes with `index` is read with the caller's own

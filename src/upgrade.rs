@@ -47,8 +47,28 @@ fn get(url: &str) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
+/// A release, and whether its file for this system has been uploaded yet.
+/// GitHub shows a new release a few minutes before its files are built.
+pub struct Release {
+    pub version: String,
+    pub ready: bool,
+}
+
+/// True when a release's reply from GitHub lists `asset` and the checksums.
+fn has_files(release: &serde_json::Value, asset: &str) -> bool {
+    let listed = |name: &str| {
+        release["assets"]
+            .as_array()
+            .is_some_and(|files| files.iter().any(|file| file["name"] == name))
+    };
+    listed(asset) && listed("SHA256SUMS")
+}
+
+pub const NOT_READY: &str = "was released moments ago and its file for this system is not \
+                             there yet; try again in a few minutes";
+
 /// The newest released version, without its leading `v`.
-pub fn latest() -> Result<String, String> {
+pub fn latest() -> Result<Release, String> {
     let body = get(&format!(
         "https://api.github.com/repos/{REPO}/releases/latest"
     ))?;
@@ -61,7 +81,11 @@ pub fn latest() -> Result<String, String> {
     if numbers(version).is_none() {
         return Err(format!("unexpected release name: {tag}"));
     }
-    Ok(version.to_string())
+    Ok(Release {
+        version: version.to_string(),
+        // A system with no release file builds from source: nothing to wait for.
+        ready: asset().is_none_or(|asset| has_files(&release, asset)),
+    })
 }
 
 fn numbers(version: &str) -> Option<Vec<u64>> {
@@ -117,10 +141,18 @@ fn swap(exe: &Path, new: &Path) -> std::io::Result<()> {
 }
 
 pub fn run(check_only: bool, force: bool) -> Result<(), String> {
-    let latest = latest()?;
+    let Release {
+        version: latest,
+        ready,
+    } = latest()?;
     if !newer(&latest, CURRENT) && !force {
         println!("lucid-dream {CURRENT} is the latest release");
         return Ok(());
+    }
+    if !ready {
+        return Err(format!(
+            "lucid-dream {latest} {NOT_READY}. This is still {CURRENT}; nothing was changed"
+        ));
     }
     if check_only {
         println!(
@@ -169,6 +201,17 @@ mod tests {
         assert!(!newer("0.4.2", "0.4.2"));
         assert!(!newer("0.4.1", "0.4.2"));
         assert!(!newer("latest", "0.4.2"));
+    }
+
+    #[test]
+    fn a_release_is_ready_once_its_files_are_listed() {
+        let building = serde_json::json!({ "assets": [{ "name": "SHA256SUMS" }] });
+        let built = serde_json::json!({ "assets": [
+            { "name": "lucid-dream-linux-x64" }, { "name": "SHA256SUMS" } ] });
+        assert!(!has_files(&building, "lucid-dream-linux-x64"));
+        assert!(!has_files(&serde_json::json!({}), "lucid-dream-linux-x64"));
+        assert!(has_files(&built, "lucid-dream-linux-x64"));
+        assert!(!has_files(&built, "lucid-dream-windows-x64.exe"));
     }
 
     #[test]

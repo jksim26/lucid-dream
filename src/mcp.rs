@@ -13,6 +13,12 @@ pub const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_SEARCH_LIMIT: u64 = 200;
 
+/// The first line of a search that did go into the deeper layer, and why.
+const DEEP_REASON: &str =
+    "The deeper layer was searched too, for the reason you gave (noted in the log).";
+const DEEP_EMPTY: &str =
+    "Working memory has no match for these words, so these come from the deeper layer.";
+
 /// The most of a project's page that comes with the index, in characters.
 const MAX_PROJECT_PAGE: usize = 12_000;
 
@@ -418,12 +424,13 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                         if !reason.is_empty() {
                             // A search is never lost because its note could not be written.
                             let _ = store.deep_searched(who, &query, &reason, &Utc::now());
-                        } else {
-                            let working = store.search(&query, "", limit, false, sealed)?;
-                            if !working.is_empty() {
-                                return Ok(format!("{DEEP_HELD}\n\n{}", lines(&working)));
-                            }
+                            return Ok(format!("{DEEP_REASON}\n\n{}", lines(&hits)));
                         }
+                        let working = store.search(&query, "", limit, false, sealed)?;
+                        if !working.is_empty() {
+                            return Ok(format!("{DEEP_HELD}\n\n{}", lines(&working)));
+                        }
+                        return Ok(format!("{DEEP_EMPTY}\n\n{}", lines(&hits)));
                     }
                     Ok(lines(&hits))
                 })
@@ -921,10 +928,12 @@ mod tests {
         );
         // Working memory has nothing for these words: deep runs.
         let deep = search(json!({ "query": "okapi", "deep": true }));
-        assert!(deep.starts_with("archive/old.md:1:"));
+        assert!(deep.starts_with("Working memory has no match"));
+        assert!(deep.contains("\n\narchive/old.md:1:"));
         // A reason opens it, and is written down with the agent's name.
         let why = "need the original wording";
         let deep = search(json!({ "query": "zebra", "deep": true, "reason": why }));
+        assert!(deep.starts_with("The deeper layer was searched too"));
         assert!(deep.contains("archive/old.md:1:") && deep.contains("wiki/zoo.md:1:"));
         let day = s.list("logs").unwrap();
         let noted = day

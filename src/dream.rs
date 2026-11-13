@@ -544,13 +544,31 @@ fn claude(prompt: &str, model: Option<&str>) -> Attempt {
     ("claude".to_string(), args, Some(prompt.to_string()))
 }
 
+/// An attempt in a few words for the log: the program and the model asked
+/// for, never the prompt.
+fn described(program: &str, args: &[String]) -> String {
+    let model = args
+        .iter()
+        .position(|arg| arg == "--model" || arg == "-m")
+        .and_then(|at| args.get(at + 1));
+    match model {
+        Some(model) => format!("{program}, model {model}"),
+        None => format!("{program}, its own default model"),
+    }
+}
+
 /// Try each agent in turn: when the first is out of quota or not installed,
 /// the next one dreams instead. A failed attempt's edits are undone first.
 fn first_success(attempts: &[Attempt], root: &Path) -> Result<(), String> {
     let mut failures = Vec::new();
     for (program, args, stdin) in attempts {
+        let with = described(program, args);
+        println!("dreaming with {with}");
         let failure = match run_agent(program, args, stdin.as_deref(), root) {
-            Ok(status) if status.success() => return Ok(()),
+            Ok(status) if status.success() => {
+                println!("dreamt with {with}");
+                return Ok(());
+            }
             Ok(status) => format!("{program} failed ({status})"),
             Err(e) => format!("cannot run {program}: {e}"),
         };
