@@ -4,7 +4,8 @@ You share a memory with the user's other agents through the `lucid-dream` MCP
 server. It exists so that what any agent learns about the user, their projects
 and their decisions is there for every other agent tomorrow.
 
-- At the start of a session, call `index` and read the pages it points to that
+- At the start of a session, call `index` with `project` set to the folder
+  you are working in, and read the pages it points to that
   bear on the task. For anything the index does not mention, call `search` with
   several likely words separated by commas; it looks in working memory. With
   `deep` set to true it also looks in the archive, session logs and messages,

@@ -280,7 +280,7 @@ The server offers eleven tools:
 
 | Tool | What it does |
 | --- | --- |
-| `index` | Returns `MEMORY.md` |
+| `index` | Returns `MEMORY.md`; with `project` (the folder you work in), that project's page comes with it |
 | `list`, `read` | Browse the store; `read` takes `from_line` for a file too large to read whole |
 | `search` | Searches working memory for any of several comma-separated words; `deep` adds the archive, logs and messages when working memory has no match, or with a `reason` |
 | `remember` | Adds a note to `inbox/` for dream to merge |

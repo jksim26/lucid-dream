@@ -5,8 +5,9 @@ any agent learns about the user, their projects and their decisions is there
 for every other agent tomorrow. You reach it by running the `lucid-dream`
 program in a shell; each call prints its answer.
 
-- At the start of a session, run `lucid-dream call index` and read the pages
-  it points to that bear on the task, with
+- At the start of a session, run
+  `lucid-dream call index '{"project": "<the folder you are working in>"}'`
+  and read the pages it points to that bear on the task, with
   `lucid-dream call read '{"path": "wiki/<page>.md"}'`.
 - To look something up, run
   `lucid-dream call search '{"query": "release, deploy, ship"}'`. It matches

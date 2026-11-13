@@ -13,6 +13,9 @@ pub const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_SEARCH_LIMIT: u64 = 200;
 
+/// The most of a project's page that comes with the index, in characters.
+const MAX_PROJECT_PAGE: usize = 12_000;
+
 /// What a search gets back when it asked for the deeper layer and was not let in.
 const DEEP_HELD: &str =
     "Working memory has matches for these words, so the deeper layer (archive, \
@@ -23,8 +26,11 @@ saying why working memory is not enough.";
 const INSTRUCTIONS: &str = "Shared memory for one person's agents, on every device. It exists \
 so that what any agent learns about the user, their projects and their decisions is there for \
 every other agent tomorrow.\n\n\
-Read: call `index` at the start of a session to load MEMORY.md, `read` the notes or wiki pages \
-it points to, and `search` for anything it does not mention. `search` looks in working memory \
+Read: call `index` at the start of a session to load MEMORY.md, passing `project` (the folder \
+or repository you are working in) if you have one, and `read` the notes or wiki pages it points \
+to that bear on the task. `search` when the question is about the user, their projects or \
+something decided or done before, and the index does not already answer it; general knowledge \
+and ordinary coding questions need no search. `search` looks in working memory \
 (the index, notes, wiki pages and notes not yet merged); give it several likely words separated \
 by commas, since it matches words, not meaning. The archive, session logs and \
 messages are a deeper layer: `deep` true reaches them, but only when working memory has no match \
@@ -105,8 +111,13 @@ fn tools() -> Value {
     json!([
         {
             "name": "index",
-            "description": "Return MEMORY.md, the index of shared memory. Load it at session start.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "description": "Return MEMORY.md, the index of shared memory. Load it at session start. With `project`, the page about that project comes with it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The name or path of the folder or repository you are working in, if any. If shared memory has a page for it, the page is returned after the index." }
+                }
+            },
             "annotations": read_only,
         },
         {
@@ -331,7 +342,30 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
     };
 
     let outcome: Result<String, StoreError> = match name {
-        "index" => store.read(INDEX),
+        "index" => store.read(INDEX).map(|index| {
+            // The page about the project the session works in comes with the
+            // index, so the agent need not work out that it should look.
+            match store.project_page(&text("project")) {
+                Some((path, page)) => {
+                    let shown: String = page.chars().take(MAX_PROJECT_PAGE).collect();
+                    let cut = if shown.len() < page.len() {
+                        format!("\n\n(cut here; `read` {path} for the rest)")
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{}\n\n# This project's page: {path}\n\nThe folder this session \
+                         works in matches this page of shared memory, so it is loaded for you. \
+                         It is what earlier sessions and the user's other agents recorded about \
+                         this project; use it before asking the user what the project is.\n\n\
+                         {}{cut}",
+                        index.trim_end(),
+                        shown.trim()
+                    )
+                }
+                None => index,
+            }
+        }),
         "list" => store.list_as(&text("dir"), sealed).map(|entries| {
             if entries.is_empty() {
                 return "no files".to_string();
@@ -905,6 +939,62 @@ mod tests {
         // A blank reason is no reason.
         let held = search(json!({ "query": "zebra", "deep": true, "reason": "  " }));
         assert!(held.starts_with("Working memory has matches"));
+    }
+
+    #[test]
+    fn the_index_brings_the_page_of_the_project_the_session_works_in() {
+        let t = Temp::new();
+        let s = t.store();
+        let write = |rel: &str, body: &str| {
+            let path = s.root().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        write("wiki/moomoo-qoder-challenge.md", "Kickoff 16 Nov.\n");
+        write("wiki/claude-trading.md", "The trading team.\n");
+        write("notes/claude-trading-operations.md", "Routines.\n");
+        write("wiki/trace.md", "A hackathon entry.\n");
+        write(
+            "wiki/books-reading-app.md",
+            "A Swift app.\n\nAlso called: Books, book_reader, reading app\n",
+        );
+        let index = |project: &str| {
+            text(&call(&s, "claude", "index", json!({ "project": project }))).to_string()
+        };
+        let page_of = |project: &str| {
+            index(project)
+                .split("# This project's page: ")
+                .nth(1)
+                .and_then(|rest| rest.lines().next())
+                .map(str::to_string)
+        };
+        // By the folder's name, from a path on either kind of machine.
+        let got = index("/Users/me/code/moomoo-qoder-challenge");
+        assert!(got.starts_with("# MEMORY"));
+        assert!(got.ends_with("Kickoff 16 Nov."));
+        assert_eq!(
+            page_of("X:\\Claude\\Claude Trading\\").as_deref(),
+            Some("wiki/claude-trading.md")
+        );
+        // By a name the page says it is also called.
+        assert_eq!(
+            page_of("book-reader").as_deref(),
+            Some("wiki/books-reading-app.md")
+        );
+        // By the start of the folder's name, for a page name of several words.
+        assert_eq!(
+            page_of("claude-trading-team").as_deref(),
+            Some("wiki/claude-trading.md")
+        );
+        assert_eq!(page_of("trace-widget"), None);
+        // No folder, or one memory knows nothing about: the index alone.
+        for none in ["", "/", "unknown-repo"] {
+            assert_eq!(index(none), index(""));
+            assert!(!index(none).contains("project's page"));
+        }
+        // A long page is cut, with the way to the rest.
+        write("wiki/big.md", &"word ".repeat(5000));
+        assert!(index("big").ends_with("(cut here; `read` wiki/big.md for the rest)"));
     }
 
     #[test]

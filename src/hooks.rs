@@ -85,11 +85,16 @@ fn without_number(title: &str) -> String {
 
 pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
     let input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
-    let index = client.call("index", json!({}))?;
+    // The folder's name lets the server send this project's page with the index.
+    let index = client.call(
+        "index",
+        json!({ "project": input["cwd"].as_str().unwrap_or("") }),
+    )?;
     println!(
         "# Shared memory (lucid-dream)\n\n{}\n\nThis index comes from the lucid-dream MCP \
-         server. Use its `read` and `search` tools for the pages it points to, and `remember` \
-         for anything a future session should know.",
+         server. Use its `read` tool for the pages it points to, `search` only for something \
+         about the user or their projects that the index does not answer, and `remember` for \
+         anything a future session should know.",
         index.trim()
     );
     // Messages other agents left for this one. Many sessions share one agent

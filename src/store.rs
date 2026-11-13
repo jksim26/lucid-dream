@@ -124,6 +124,16 @@ fn check_text(text: &str) -> Result<&str, StoreError> {
 }
 
 /// What a caller who may not see session records is told.
+/// A name reduced to lowercase letters and digits joined by single hyphens,
+/// so "Claude Trading", "claude_trading" and "claude-trading" compare equal.
+fn slug(name: &str) -> String {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// True for a file in the deeper layer: the archive, session logs, messages.
 pub fn is_deep(rel: &str) -> bool {
     let rel = rel.to_lowercase();
@@ -464,7 +474,65 @@ impl Store {
         Ok(())
     }
 
-    /// Write a file at a path this module built from checked parts.
+    /// The page about the project a session works in, found from the name
+    /// of its folder: a page in `wiki/` or `notes/` named like the folder,
+    /// one whose `Also called:` line lists it, or one whose name the folder's
+    /// name starts with ("claude-trading" for a folder "claude-trading-team").
+    /// Returns the page's path and text.
+    pub fn project_page(&self, folder: &str) -> Option<(String, String)> {
+        let name = folder
+            .trim()
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("");
+        let wanted = slug(name);
+        if wanted.is_empty() {
+            return None;
+        }
+        let mut pages = Vec::new();
+        for dir in ["wiki", "notes"] {
+            let mut found: Vec<PathBuf> = fs::read_dir(self.root.join(dir))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|e| e == "md"))
+                .collect();
+            found.sort();
+            pages.extend(found);
+        }
+        let stem = |path: &Path| slug(&path.file_stem().unwrap_or_default().to_string_lossy());
+        let page = |path: &Path| {
+            let rel = self.rel(path);
+            self.read(&rel).ok().map(|text| (rel, text))
+        };
+        if let Some(path) = pages.iter().find(|path| stem(path) == wanted) {
+            return page(path);
+        }
+        let called = pages
+            .iter()
+            .filter_map(|path| page(path))
+            .find(|(_, text)| {
+                text.lines()
+                    .filter_map(|line| line.trim().strip_prefix("Also called:"))
+                    .flat_map(|names| names.split(','))
+                    .any(|other| slug(other) == wanted)
+            });
+        if called.is_some() {
+            return called;
+        }
+        // A one-word page name is too easy to match by accident.
+        pages
+            .iter()
+            .filter(|path| {
+                let stem = stem(path);
+                stem.contains('-') && wanted.starts_with(&format!("{stem}-"))
+            })
+            .max_by_key(|path| stem(path).len())
+            .and_then(|path| page(path))
+    }
+
     fn create(&self, rel: &str, body: &str, replace: bool) -> Result<(), StoreError> {
         let path = self.root.join(rel);
         if let Some(dir) = path.parent() {

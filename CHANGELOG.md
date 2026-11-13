@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.0 (2026-11-13)
+
+- A new session is handed the page about the project it works in. The
+  session-start hook sends the folder's name with `index`, and the server
+  adds the page from `wiki/` or `notes/` that is named like the folder, that
+  lists it under `Also called:`, or whose name the folder's name starts with.
+  Other agents can pass `project` to `index` themselves.
+- The dream adds each project's folder name to its page's `Also called:` line.
+- The instructions say when to search at all: for something about the user,
+  their projects or past decisions that the index does not answer.
+
 ## 0.16.0 (2026-11-13)
 
 - The server now decides when a search may go past working memory. A search
