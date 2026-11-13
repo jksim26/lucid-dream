@@ -345,7 +345,7 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
         "index" => store.read(INDEX).map(|index| {
             // The page about the project the session works in comes with the
             // index, so the agent need not work out that it should look.
-            match store.project_page(&text("project")) {
+            match store.project_page(&text("project"), sealed) {
                 Some((path, page)) => {
                     let shown: String = page.chars().take(MAX_PROJECT_PAGE).collect();
                     let cut = if shown.len() < page.len() {
@@ -992,6 +992,15 @@ mod tests {
             assert_eq!(index(none), index(""));
             assert!(!index(none).contains("project's page"));
         }
+        // A session record never comes this way through a sealed door.
+        write("wiki/secret.record.md", "what a session said\n");
+        let door = |who: &str| {
+            let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "index", "arguments": { "project": "secret.record" } } });
+            text(&handle_from(&s, who, true, &msg).unwrap()["result"]).to_string()
+        };
+        assert!(!door("chatgpt").contains("what a session said"));
+        assert!(index("secret.record").contains("what a session said"));
         // A long page is cut, with the way to the rest.
         write("wiki/big.md", &"word ".repeat(5000));
         assert!(index("big").ends_with("(cut here; `read` wiki/big.md for the rest)"));

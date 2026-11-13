@@ -479,7 +479,7 @@ impl Store {
     /// one whose `Also called:` line lists it, or one whose name the folder's
     /// name starts with ("claude-trading" for a folder "claude-trading-team").
     /// Returns the page's path and text.
-    pub fn project_page(&self, folder: &str) -> Option<(String, String)> {
+    pub fn project_page(&self, folder: &str, sealed: bool) -> Option<(String, String)> {
         let name = folder
             .trim()
             .trim_end_matches(['/', '\\'])
@@ -505,7 +505,8 @@ impl Store {
         let stem = |path: &Path| slug(&path.file_stem().unwrap_or_default().to_string_lossy());
         let page = |path: &Path| {
             let rel = self.rel(path);
-            self.read(&rel).ok().map(|text| (rel, text))
+            // Read as the caller may read: a sealed door gets no session record.
+            self.read_as(&rel, sealed).ok().map(|text| (rel, text))
         };
         if let Some(path) = pages.iter().find(|path| stem(path) == wanted) {
             return page(path);

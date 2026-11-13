@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1 (2026-11-13)
+
+- The project page that comes with `index` is read with the caller's own
+  rights, so a file named like a session record cannot reach an untrusted
+  door that way.
+
 ## 0.17.0 (2026-11-13)
 
 - A new session is handed the page about the project it works in. The
