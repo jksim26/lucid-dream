@@ -83,53 +83,130 @@ fn without_number(title: &str) -> String {
         .to_string()
 }
 
+/// Claude Code hands a hook's output to the session whole only while it is
+/// short: past about 10,000 characters the session gets the first 2,000 and
+/// a file name. Everything a session is told at its start has to fit.
+const START_BUDGET: usize = 9_700;
+/// The most of that budget that unread messages may take.
+const START_MESSAGES: usize = 1_500;
+/// Where the server's `index` reply turns from the index to the project's page.
+const PAGE_MARK: &str = "\n\n# This project's page: ";
+
+/// The start of `text` that fits in `max` bytes, ending on a whole line.
+fn fitting(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    match text[..end].rfind('\n') {
+        Some(line_end) => &text[..line_end],
+        None => &text[..end],
+    }
+}
+
+/// What a session is told when it starts, within `budget` bytes. The things
+/// only this text can tell it come first: its number, then its messages.
+/// The index follows, and the project's page gets whatever room is left,
+/// or a line saying which page to read.
+fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget: usize) -> String {
+    let mut out = String::from("# Shared memory (lucid-dream)\n");
+    if let Some(number) = number {
+        out.push_str(&format!(
+            "\nThis session is #{number} in the lucid-dream `who` list; other agents reach it \
+             by that number. If you have a tool that sets this session's own title, keep \
+             \"#{number} \" at the start of it, followed by the topic (\"#{number} Login bug\"). \
+             Tell the user the number if they ask which session this is. When you `send` a \
+             message, pass `from_session` \"{number}\".\n"
+        ));
+    }
+    if let Some(messages) = messages {
+        let shown = fitting(messages.trim(), START_MESSAGES);
+        let more = if shown.len() < messages.trim().len() {
+            "\n(more follows; call the lucid-dream `messages` tool with `peek` true to see all)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "\n# Unread messages from your other agents\n\n{shown}{more}\n\nTell the user about \
+             these if they are relevant or if they ask. Once they have been dealt with, call \
+             the lucid-dream `messages` tool to mark them read; until then every new session \
+             is shown them again.\n"
+        ));
+    }
+    let (index, page) = match reply.split_once(PAGE_MARK) {
+        Some((index, page)) => (index.trim(), Some(page)),
+        None => (reply.trim(), None),
+    };
+    const USE: &str = "\n\nThis index comes from the lucid-dream MCP server. Use its `read` tool \
+                       for the pages it points to, `search` only for something about the user or \
+                       their projects that the index does not answer, and `remember` for \
+                       anything a future session should know.\n";
+    // Room is kept for the line that names the project's page.
+    let kept = if page.is_some() { 400 } else { 0 };
+    let room = budget.saturating_sub(out.len() + USE.len() + kept + 100);
+    let shown = fitting(index, room);
+    out.push('\n');
+    out.push_str(shown);
+    if shown.len() < index.len() {
+        out.push_str("\n(the index is cut here; call the lucid-dream `index` tool for all of it)");
+    }
+    out.push_str(USE);
+    if let Some(page) = page {
+        // The reply gives the page's path, a line about it, then the page.
+        let (path, body) = page.split_once('\n').unwrap_or((page, ""));
+        let body = body.trim();
+        let head = format!(
+            "\n# This project's page: {path}\n\nThe folder this session works in is the \
+             project this page of shared memory describes: what earlier sessions and the \
+             user's other agents recorded about it."
+        );
+        let room = budget.saturating_sub(out.len() + head.len() + 160);
+        if body.len() <= room {
+            out.push_str(&format!("{head}\n\n{body}\n"));
+        } else {
+            let shown = fitting(body, room);
+            out.push_str(&format!(
+                "{head} It is too long to show here: `read` {path} with the lucid-dream tool \
+                 before you start work or ask the user what the project is.\n"
+            ));
+            if shown.len() > 400 {
+                out.push_str(&format!("\nIt begins:\n\n{shown}\n"));
+            }
+        }
+    }
+    out
+}
+
 pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
     // Off unless the user turned it on; starts in the background and returns.
     crate::upgrade::from_hook();
     let input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
     // The folder's name lets the server send this project's page with the index.
-    let index = client.call(
+    let reply = client.call(
         "index",
         json!({ "project": input["cwd"].as_str().unwrap_or("") }),
     )?;
-    println!(
-        "# Shared memory (lucid-dream)\n\n{}\n\nThis index comes from the lucid-dream MCP \
-         server. Use its `read` tool for the pages it points to, `search` only for something \
-         about the user or their projects that the index does not answer, and `remember` for \
-         anything a future session should know.",
-        index.trim()
-    );
+    // Announce this session; the server answers with the number it is listed
+    // under. An older server has no `check_in`, and the session goes unnamed.
+    let number = client.call("check_in", who_i_am(&input)).ok();
     // Messages other agents left for this one. Many sessions share one agent
     // name, so this only peeks: the message stays unread until a session that
     // has actually handled it calls `messages`.
-    // Announce this session; the server answers with the name it is listed
-    // under. An older server has no `check_in`, and the session goes unnamed.
-    let me = who_i_am(&input);
     let mut ask = json!({ "peek": true });
-    if let Ok(number) = client.call("check_in", me) {
-        println!(
-            "\nThis session is #{number} in the lucid-dream `who` list; other agents reach it \
-             by that number. So the user can tell their sessions apart, keep \"#{number} \" at \
-             the start of this session's title, followed by its topic (for example \
-             \"#{number} Login bug\"): if you have a tool that sets this session's own title, \
-             set it once the topic is clear and again if the number goes missing; if you have \
-             none, do nothing. Tell the user the number if they ask which session this is. When \
-             you `send` a message, pass `from_session` \"{number}\" so the reply comes back \
-             to this session."
-        );
+    if let Some(number) = &number {
         ask["session"] = json!(number);
     }
-    if let Ok(messages) = client.call("messages", ask) {
-        if messages != "no new messages" {
-            println!(
-                "\n# Unread messages from your other agents\n\n{}\n\nTell the user about these \
-                 if they are relevant or if they ask. Once they have been dealt with, call the \
-                 lucid-dream `messages` tool to mark them read; until then every new session is \
-                 shown them again.",
-                messages.trim()
-            );
-        }
-    }
+    let messages = client
+        .call("messages", ask)
+        .ok()
+        .filter(|messages| messages != "no new messages");
+    print!(
+        "{}",
+        start_text(&reply, number.as_deref(), messages.as_deref(), START_BUDGET)
+    );
     Ok(())
 }
 
@@ -693,6 +770,52 @@ pub fn session_end(client: &Client, input: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_session_is_told_at_its_start_always_fits() {
+        let index = format!(
+            "# MEMORY\n{}",
+            "- [Page](wiki/page.md) when to read it\n".repeat(150)
+        );
+        let page = format!(
+            "Line about the project.\n{}",
+            "A fact about it.\n".repeat(900)
+        );
+        let reply = format!(
+            "{index}\n\n# This project's page: wiki/big.md\n\nThe folder matches.\n\n{page}"
+        );
+        let messages = "from grok: please look\n".repeat(200);
+        let told = start_text(&reply, Some("11"), Some(&messages), START_BUDGET);
+        assert!(told.len() <= START_BUDGET, "{}", told.len());
+        // What only this text can say comes first and is never cut away.
+        let number = told.find("This session is #11").unwrap();
+        let unread = told.find("# Unread messages").unwrap();
+        let memory = told.find("# MEMORY").unwrap();
+        assert!(number < unread && unread < memory);
+        assert!(told.contains("(more follows;"));
+        // The page did not fit: the session is told which page to read.
+        assert!(told.contains("# This project's page: wiki/big.md"));
+        assert!(told.contains("`read` wiki/big.md"));
+
+        // A short page is shown whole, after the whole index.
+        let reply = "# MEMORY\n- a line\n\n# This project's page: wiki/small.md\n\nIt matches.\n\nKickoff 16 Nov.";
+        let told = start_text(reply, None, None, START_BUDGET);
+        assert!(told.contains("- a line") && told.ends_with("Kickoff 16 Nov.\n"));
+        assert!(!told.contains("too long") && !told.contains("This session is"));
+
+        // An index too long for the budget is cut on a line, and says so.
+        let long = format!("# MEMORY\n{}", "- a long line of the index\n".repeat(900));
+        let told = start_text(&long, Some("2"), None, START_BUDGET);
+        assert!(told.len() <= START_BUDGET);
+        assert!(told.contains("(the index is cut here;"));
+    }
+
+    #[test]
+    fn text_is_cut_on_a_whole_line_and_a_whole_character() {
+        assert_eq!(fitting("one\ntwo\nthree", 9), "one\ntwo");
+        assert_eq!(fitting("short", 99), "short");
+        assert_eq!(fitting("ééé", 3), "é");
+    }
 
     #[test]
     fn a_headless_run_is_not_waited_on() {

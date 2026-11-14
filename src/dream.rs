@@ -10,6 +10,8 @@ use crate::util::{git, Utc};
 
 const PROMPT: &str = include_str!("dream_prompt.md");
 const INDEX_LINE_LIMIT: usize = 200;
+/// What fits in a session's start text beside its number and messages.
+const INDEX_SIZE_LIMIT: u64 = 7_000;
 
 /// Set for the agent that dream runs; `lucid-dream hook` does nothing when it is.
 pub const DREAMING_ENV: &str = "LUCID_DREAMING";
@@ -388,6 +390,15 @@ fn dream(root: &Path, dry_run: bool) -> Result<String, String> {
     let index_lines = fs::read_to_string(root.join("MEMORY.md"))
         .map(|t| t.lines().count())
         .unwrap_or(0);
+    let index_size = fs::metadata(root.join("MEMORY.md"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if index_size > INDEX_SIZE_LIMIT {
+        eprintln!(
+            "warning: MEMORY.md is {index_size} bytes; a session is shown about \
+             {INDEX_SIZE_LIMIT} at its start and the rest is cut"
+        );
+    }
     if index_lines > INDEX_LINE_LIMIT {
         eprintln!("warning: MEMORY.md is {index_lines} lines; sessions load only the first {INDEX_LINE_LIMIT}");
     }

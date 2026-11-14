@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.18.1 (2026-11-14)
+
+- Fixed: since 0.17.0 a session that started in a folder with a project page
+  was shown only the first 2,000 characters of its start text, with no
+  session number, no messages and most of the index missing. The index and
+  the page together passed the size Claude Code shows whole. The start text
+  now always fits: the session's number and unread messages come first, then
+  the index, then the project's page if there is room, or a line saying which
+  page to read.
+- The dream is told to keep `MEMORY.md` under 7,000 characters, and warns
+  when it is larger.
+
 ## 0.18.0 (2026-11-14)
 
 - Automatic upgrades, off unless you turn them on. `lucid-dream upgrade --auto
