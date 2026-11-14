@@ -60,14 +60,40 @@ fn who_i_am(input: &Value) -> Value {
 
 /// The latest title in a transcript, if the session has been given one.
 fn title_in(jsonl: &str) -> Option<String> {
+    full_title_in(jsonl)
+        .map(|title| without_number(&title))
+        .filter(|title| !title.is_empty())
+}
+
+/// The latest title in a transcript as shown, number and all.
+fn full_title_in(jsonl: &str) -> Option<String> {
     jsonl
         .lines()
         .rev()
         .filter(|line| line.contains("\"custom-title\""))
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|entry| entry["type"] == "custom-title")
-        .and_then(|entry| entry["customTitle"].as_str().map(without_number))
-        .filter(|title| !title.is_empty())
+        .and_then(|entry| entry["customTitle"].as_str().map(|t| t.trim().to_string()))
+}
+
+/// What stops a session's turn, once, when its title does not start with its
+/// number. The start text asks for the title, but a session busy with its
+/// first task puts it off and forgets; this hook does not forget.
+fn title_nudge(number: &str, title: Option<&str>) -> Option<String> {
+    let want = format!("#{number} ");
+    if title.is_some_and(|t| t.starts_with(&want)) {
+        return None;
+    }
+    let now = match title {
+        Some(t) if !t.is_empty() => format!("Its title is \"{t}\". "),
+        _ => String::new(),
+    };
+    Some(format!(
+        "lucid-dream: this session is #{number}, but its title does not start with \"#{number} \". \
+         {now}Before you finish, set this session's own title to \"#{number} \" followed by its topic, \
+         with the tool that sets a session's title (load it first if you must). If you have no \
+         such tool, skip this. Do it without telling the user anything more than one short line."
+    ))
 }
 
 /// A title as the topic alone: "#3 Login bug" is about "Login bug".
@@ -225,11 +251,34 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
         .and_then(|path| fs::read_to_string(path).ok())
         .unwrap_or_default();
     // A session gets its title after it starts, so each turn reports it.
-    if input["session_id"]
-        .as_str()
-        .is_some_and(|id| !id.is_empty())
-    {
-        let _ = client.call("check_in", who_i_am(&input));
+    let mut nudge = None;
+    if let Some(id) = input["session_id"].as_str().filter(|id| !id.is_empty()) {
+        let number = client.call("check_in", who_i_am(&input)).ok();
+        let unattended = headless(
+            std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
+            std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
+                .ok()
+                .as_deref(),
+        );
+        if let (Some(number), false) = (number.filter(|n| !n.is_empty()), unattended) {
+            // Asked once per session and number, so a session with no title
+            // tool is not stopped after every turn.
+            let asked = state_dir("titled").map(|dir| {
+                dir.join(format!(
+                    "{}-{}",
+                    crate::util::label(id),
+                    crate::util::label(&number)
+                ))
+            });
+            if let Ok(asked) = asked {
+                if !asked.exists() {
+                    nudge = title_nudge(&number, full_title_in(&transcript).as_deref());
+                    if nudge.is_some() {
+                        let _ = fs::write(&asked, "");
+                    }
+                }
+            }
+        }
     }
     let (prompts, transcript_reply) = read_transcript(&transcript);
     // The summary goes first: Claude Code gives this hook only a few seconds,
@@ -272,6 +321,10 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
                 }
             }
         }
+    }
+    // Printed last: the summary and the record are sent either way.
+    if let Some(reason) = nudge {
+        println!("{}", json!({ "decision": "block", "reason": reason }));
     }
     summary.map(|_| ())
 }
@@ -801,7 +854,11 @@ mod tests {
         assert!(told.contains("replace that number with this one"));
         // Claude sessions reach each other through the app first.
         let app = told.find("`ListAgents`, then `SendMessage`").unwrap();
-        assert!(app < told.find("lucid-dream `send` tool only when that fails").unwrap());
+        assert!(
+            app < told
+                .find("lucid-dream `send` tool only when that fails")
+                .unwrap()
+        );
         assert!(told.contains("(more follows;"));
         // The page did not fit: the session is told which page to read.
         assert!(told.contains("# This project's page: wiki/big.md"));
@@ -818,6 +875,20 @@ mod tests {
         let told = start_text(&long, Some("2"), None, START_BUDGET);
         assert!(told.len() <= START_BUDGET);
         assert!(told.contains("(the index is cut here;"));
+    }
+
+    #[test]
+    fn a_title_without_the_sessions_number_is_asked_for() {
+        assert_eq!(title_nudge("5", Some("#5 Test index system")), None);
+        let none = title_nudge("5", None).unwrap();
+        assert!(none.contains("\"#5 \" followed by its topic"));
+        let stale = title_nudge("7", Some("#2 Agent memory repo")).unwrap();
+        assert!(stale.contains("Its title is \"#2 Agent memory repo\""));
+        // "#51 ..." is not session 5.
+        assert!(title_nudge("5", Some("#51 Other")).is_some());
+        let jsonl = r##"{"type":"custom-title","customTitle":"#5 Topic","sessionId":"s"}"##;
+        assert_eq!(full_title_in(jsonl).as_deref(), Some("#5 Topic"));
+        assert_eq!(title_in(jsonl).as_deref(), Some("Topic"));
     }
 
     #[test]

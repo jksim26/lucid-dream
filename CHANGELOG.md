@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.5 (2026-11-14)
+
+- A Claude Code session whose title does not start with its session number
+  is stopped once at the end of a turn and asked to set it. The start text
+  alone was not enough: a session busy with its first task put the rename
+  off and forgot. It is asked once per session and number, so a session with
+  no title tool is not stopped again, and never in a headless run.
+
 ## 0.18.4 (2026-11-14)
 
 - The start text tells a Claude session to message another Claude session

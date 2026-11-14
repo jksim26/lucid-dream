@@ -1,7 +1,7 @@
 {
   "name": "lucid-dream",
   "displayName": "Lucid Dream",
-  "version": "0.18.4",
+  "version": "0.18.5",
   "description": "One memory shared by all your AI agents. Loads the memory index when a session starts, logs each session, and wakes an idle session when another agent messages it. Talks only to the lucid-dream server you run. Needs the lucid-dream program installed.",
   "author": {
     "name": "jksim26",
