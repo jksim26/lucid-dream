@@ -3,7 +3,8 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::util::sha256_hex;
@@ -160,13 +161,25 @@ pub fn run(check_only: bool, force: bool) -> Result<(), String> {
         );
         return Ok(());
     }
+    println!("Downloading lucid-dream {latest}");
+    let exe = install(&latest)?;
+    println!("Upgraded {CURRENT} to {latest} at {}", exe.display());
+    println!(
+        "A server or a waiting hook that is already running keeps the old version until it \
+         restarts."
+    );
+    Ok(())
+}
+
+/// Download release `latest`, check it, and put it where this program is.
+/// Nothing is changed unless the download matches its checksum and runs.
+fn install(latest: &str) -> Result<PathBuf, String> {
     let asset = asset().ok_or(format!(
         "no release binary for this system; build it with: cargo install --git \
          https://github.com/{REPO}"
     ))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let base = format!("https://github.com/{REPO}/releases/download/v{latest}");
-    println!("Downloading lucid-dream {latest}");
     let binary = get(&format!("{base}/{asset}"))?;
     let sums = String::from_utf8(get(&format!("{base}/SHA256SUMS"))?)
         .map_err(|_| "the checksum file is not text".to_string())?;
@@ -176,18 +189,244 @@ pub fn run(check_only: bool, force: bool) -> Result<(), String> {
     }
 
     let io = |e: std::io::Error| format!("{}: {e}", exe.display());
-    let new = exe.with_extension("new");
+    // Windows only runs a file whose name ends in `.exe`.
+    let new = exe.with_extension(if cfg!(windows) { "new.exe" } else { "new" });
     fs::write(&new, &binary).map_err(io)?;
-    if let Err(e) = swap(&exe, &new) {
+    let installed = runs_as(&new, latest).and_then(|()| swap(&exe, &new).map_err(io));
+    if let Err(e) = installed {
         let _ = fs::remove_file(&new);
-        return Err(io(e));
+        return Err(e);
     }
-    println!("Upgraded {CURRENT} to {latest} at {}", exe.display());
-    println!(
-        "A server or a waiting hook that is already running keeps the old version until it \
-         restarts."
-    );
+    Ok(exe)
+}
+
+/// A download that cannot start, or is not the version it claims to be, is
+/// never put in place: an upgrade nobody watches must not leave a machine
+/// with a program that does not run.
+fn runs_as(new: &Path, version: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(new, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    let out = Command::new(new)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("the downloaded program does not start ({e}); nothing was changed"))?;
+    let said = String::from_utf8_lossy(&out.stdout);
+    if out.status.success() && said.split_whitespace().any(|word| word == version) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the downloaded program did not report version {version}; nothing was changed"
+        ))
+    }
+}
+
+/// Upgrade without a word unless something changed: `Ok(Some(version))` when
+/// a newer release was installed, `Ok(None)` when there is nothing to do yet.
+pub fn quiet() -> Result<Option<String>, String> {
+    let release = latest()?;
+    if !newer(&release.version, CURRENT) || !release.ready || asset().is_none() {
+        return Ok(None);
+    }
+    install(&release.version)?;
+    Ok(Some(release.version))
+}
+
+// ---- Automatic upgrades: off unless the user turns them on for a machine ----
+
+/// Set by `serve --auto-upgrade`; the same as `upgrade --auto on`, for one run.
+pub const AUTO_ENV: &str = "LUCID_AUTO_UPGRADE";
+/// Tells a server it was started by its own upgrade, so the ports it wants
+/// may take a moment to come free.
+pub const RESTARTED_ENV: &str = "LUCID_RESTARTED";
+/// A client looks for a new release at most this often.
+const CHECK_EVERY_SECS: i64 = 20 * 3600;
+
+fn auto_dir() -> Result<PathBuf, String> {
+    crate::hooks::state_dir("upgrade")
+}
+
+/// Turn automatic upgrades on or off for this machine.
+pub fn set_auto(on: bool) -> Result<(), String> {
+    let marker = auto_dir()?.join("on");
+    if on {
+        fs::write(&marker, "").map_err(|e| e.to_string())
+    } else {
+        match fs::remove_file(&marker) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
+}
+
+pub fn auto_on() -> bool {
+    std::env::var_os(AUTO_ENV).is_some_and(|v| v == "1")
+        || auto_dir().is_ok_and(|dir| dir.join("on").exists())
+}
+
+/// What the last automatic upgrade on this machine did, if one has run.
+pub fn last_auto() -> Option<String> {
+    fs::read_to_string(auto_dir().ok()?.join("last"))
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn note_auto(what: &str) {
+    if let Ok(dir) = auto_dir() {
+        let _ = fs::write(
+            dir.join("last"),
+            format!("{} {what}\n", crate::util::Utc::now().iso()),
+        );
+    }
+}
+
+/// True when a client last looked for a release long enough ago to look again.
+fn check_due(last: Option<i64>, now: i64) -> bool {
+    last.is_none_or(|last| now - last >= CHECK_EVERY_SECS || last > now)
+}
+
+/// Called at the start of a session. When automatic upgrades are on and this
+/// machine has not looked today, start `upgrade --quiet` in the background
+/// and return at once: the session never waits, and the next one gets the
+/// new version.
+pub fn from_hook() {
+    if !auto_on() || std::env::var_os(crate::dream::DREAMING_ENV).is_some() {
+        return;
+    }
+    let Ok(dir) = auto_dir() else { return };
+    let stamp = dir.join("checked");
+    let last = fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|text| text.trim().parse().ok());
+    let now = crate::util::unix_now();
+    if !check_due(last, now) {
+        return;
+    }
+    // Stamp first, so sessions starting together do not all upgrade at once.
+    if fs::write(&stamp, now.to_string()).is_err() {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = Command::new(exe)
+            .args(["upgrade", "--quiet"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+/// `upgrade --quiet`: what the hook starts. Says nothing; leaves a note.
+pub fn run_quiet() -> Result<(), String> {
+    match quiet() {
+        Ok(Some(version)) => note_auto(&format!("upgraded {CURRENT} to {version}")),
+        Ok(None) => {}
+        Err(e) => {
+            note_auto(&format!("could not upgrade: {e}"));
+            return Err(e);
+        }
+    }
     Ok(())
+}
+
+/// The time of day a server looks for a release: half an hour after its
+/// nightly dream, or 04:00 when it has none. Nobody is using it then.
+pub fn server_time(dream_at: Option<(u32, u32)>) -> (u32, u32) {
+    match dream_at {
+        Some((h, m)) => {
+            let minutes = (h * 60 + m + 30) % (24 * 60);
+            (minutes / 60, minutes % 60)
+        }
+        None => (4, 0),
+    }
+}
+
+/// For as long as the server runs: once a day at `at`, if automatic upgrades
+/// are on and no dream is running, install a newer release and start it in
+/// this server's place. The switch is read each time, so turning it on or
+/// off needs no restart.
+pub fn watch(root: PathBuf, at: (u32, u32)) {
+    use chrono::{Local, TimeZone};
+    std::thread::spawn(move || {
+        let mut looked: Option<i64> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            let now = Local::now();
+            let Some(todays_time) = now
+                .date_naive()
+                .and_hms_opt(at.0, at.1, 0)
+                .and_then(|t| Local.from_local_datetime(&t).earliest())
+                .map(|t| t.timestamp())
+            else {
+                continue;
+            };
+            let due = now.timestamp() >= todays_time && looked.is_none_or(|l| l < todays_time);
+            if !due || !auto_on() || crate::dream::running_since(&root).is_some() {
+                continue;
+            }
+            looked = Some(now.timestamp());
+            match quiet() {
+                Ok(None) => {}
+                Ok(Some(version)) => {
+                    eprintln!("lucid-dream: upgraded {CURRENT} to {version}; restarting");
+                    note_auto(&format!(
+                        "upgraded {CURRENT} to {version} and restarted the server"
+                    ));
+                    // Only returns if the new program could not be started:
+                    // this one then keeps serving, on the old version.
+                    let e = restart();
+                    eprintln!("lucid-dream: could not restart after the upgrade: {e}");
+                    note_auto(&format!(
+                        "upgraded to {version} but could not restart the server: {e}"
+                    ));
+                }
+                Err(e) => {
+                    eprintln!("lucid-dream: automatic upgrade failed: {e}");
+                    note_auto(&format!("could not upgrade: {e}"));
+                }
+            }
+        }
+    });
+}
+
+/// Start the program now on disk with this run's own arguments, in this
+/// process's place. Returns only on failure.
+fn restart() -> String {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return e.to_string(),
+    };
+    let mut command = Command::new(exe);
+    command
+        .args(std::env::args_os().skip(1))
+        .env(RESTARTED_ENV, "1");
+    #[cfg(unix)]
+    {
+        // The same process becomes the new program, so whatever keeps the
+        // server running (launchd, systemd, a terminal) sees no change.
+        use std::os::unix::process::CommandExt;
+        command.exec().to_string()
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows cannot replace a running process: start the new one apart
+        // from this one's console, then leave so it can take the ports.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        match command.spawn() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => e.to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +451,32 @@ mod tests {
         assert!(!has_files(&serde_json::json!({}), "lucid-dream-linux-x64"));
         assert!(has_files(&built, "lucid-dream-linux-x64"));
         assert!(!has_files(&built, "lucid-dream-windows-x64.exe"));
+    }
+
+    #[test]
+    fn a_server_looks_for_a_release_after_its_dream() {
+        assert_eq!(server_time(Some((3, 0))), (3, 30));
+        assert_eq!(server_time(Some((23, 45))), (0, 15));
+        assert_eq!(server_time(None), (4, 0));
+    }
+
+    #[test]
+    fn a_client_looks_about_once_a_day() {
+        let now = 1_800_000_000;
+        assert!(check_due(None, now));
+        assert!(!check_due(Some(now - 3600), now));
+        assert!(check_due(Some(now - 21 * 3600), now));
+        // A clock that went backwards must not stop upgrades for good.
+        assert!(check_due(Some(now + 10), now));
+    }
+
+    #[test]
+    fn a_download_must_start_and_be_the_version_it_claims() {
+        let me = std::env::current_exe().unwrap();
+        // The test program is not lucid-dream: it does not report the version.
+        assert!(runs_as(&me, "9.9.9").is_err());
+        let missing = me.with_file_name("no-such-program");
+        assert!(runs_as(&missing, CURRENT).is_err());
     }
 
     #[test]

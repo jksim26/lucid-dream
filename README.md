@@ -146,6 +146,19 @@ lucid-dream upgrade
 lucid-dream uninstall
 ```
 
+To let a machine keep itself current, turn automatic upgrades on there:
+
+```bash
+lucid-dream upgrade --auto on
+```
+
+It is off unless you do this. A server then looks once a day, half an hour
+after its dream, installs a newer release and restarts in place; sessions
+look about once a day in the background. `lucid-dream upgrade --auto status`
+shows the switch and what the last automatic upgrade did. With it on, a
+machine runs whatever this repository releases without you looking first, so
+leave it off if you would rather read the changelog before upgrading.
+
 `doctor` checks the version, the hooks, the token and the server, and changes
 nothing; add `--root <memory dir>` on the machine that holds the memory.
 `upgrade` replaces the program with the latest release after verifying its

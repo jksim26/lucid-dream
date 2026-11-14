@@ -81,9 +81,23 @@ pub fn serve_all(listeners: Vec<(SocketAddr, App)>) -> Result<(), String> {
         .block_on(async {
             let mut running = tokio::task::JoinSet::new();
             for (addr, router) in routers {
-                let listener = tokio::net::TcpListener::bind(addr)
-                    .await
-                    .map_err(|e| format!("cannot listen on {addr}: {e}"))?;
+                // A server started by its own upgrade may arrive before the
+                // old one has let go of the port: give it a little while.
+                let mut tries = if std::env::var_os(crate::upgrade::RESTARTED_ENV).is_some() {
+                    60
+                } else {
+                    1
+                };
+                let listener = loop {
+                    tries -= 1;
+                    match tokio::net::TcpListener::bind(addr).await {
+                        Ok(listener) => break listener,
+                        Err(_) if tries > 0 => {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await
+                        }
+                        Err(e) => return Err(format!("cannot listen on {addr}: {e}")),
+                    }
+                };
                 running.spawn(async move { axum::serve(listener, router).await });
             }
             // They run until the process is stopped; if one ends, stop them all.

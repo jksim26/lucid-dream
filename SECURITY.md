@@ -48,6 +48,12 @@ open a public issue for a vulnerability.
 
 ## Known limits
 
+- Automatic upgrades (`upgrade --auto on`, off by default) install whatever
+  this repository's latest release is. The download is checked against the
+  release's own checksum file, which protects against a damaged download but
+  not against a release published by someone who has taken over the
+  repository. Leave it off on a machine where that matters.
+
 - Anyone with file access to the memory store can read and change it without
   the server. Protect the folder as you would the notes themselves.
 - The main listener speaks plain HTTP. Keep it on a private network such as

@@ -60,6 +60,8 @@ On the machine that holds the memory:
   lucid-dream serve --root <dir> --dream-at 03:00 [--dream-with \"codex exec ...\"]
                                                 also tidy the memory every day at that time
                                                 on this machine's clock; no scheduler needed
+  lucid-dream serve --root <dir> --auto-upgrade  install new releases itself, once a day after
+                                                the dream, and restart (off unless asked for)
   lucid-dream serve --root <dir> --dream-at 03:00 --backup-to <folder>
                                                 after each dream, copy the whole memory into
                                                 that folder as one file (a synced or second
@@ -94,6 +96,7 @@ On any device:
                                                 version, and the store when given; changes
                                                 nothing
   lucid-dream upgrade [--check]                 replace this program with the latest release
+  lucid-dream upgrade --auto on|off|status      let this machine upgrade itself, about once a day
                                                 (checksum verified); --check only looks
   lucid-dream uninstall [--plan]                take the hooks and the MCP server back out of
                                                 Claude Code; the memory is not touched
@@ -364,7 +367,7 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
             "--dream-model",
             "--backup-to",
         ],
-        &["--stdio"],
+        &["--stdio", "--auto-upgrade"],
     )?;
     let store = args.store()?;
     if args.switches.contains("--stdio") {
@@ -430,8 +433,18 @@ fn cmd_serve(raw: Vec<String>) -> Result<(), String> {
     }
     // `--dream-at 03:00`: the server tidies the memory itself every day, so
     // no scheduler has to be set up.
-    if let Some(at) = args.option("--dream-at") {
-        let at = dream::time_of_day(&at)?;
+    // `--auto-upgrade`: this server installs new releases itself and restarts.
+    // `lucid-dream upgrade --auto on` does the same without changing how the
+    // server is started; the watcher below reads that switch each day.
+    if args.switches.contains("--auto-upgrade") {
+        std::env::set_var(upgrade::AUTO_ENV, "1");
+    }
+    let dream_at = args
+        .option("--dream-at")
+        .map(|at| dream::time_of_day(&at))
+        .transpose()?;
+    upgrade::watch(root.clone(), upgrade::server_time(dream_at));
+    if let Some(at) = dream_at {
         eprintln!(
             "lucid-dream: dreaming every day at {:02}:{:02}, this machine's time",
             at.0, at.1
@@ -904,7 +917,32 @@ fn cmd_uninstall(raw: Vec<String>) -> Result<(), String> {
 }
 
 fn cmd_upgrade(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &[], &["--check", "--force"])?;
+    let args = Args::parse(raw, &["--auto"], &["--check", "--force", "--quiet"])?;
+    if let Some(auto) = args.option("--auto") {
+        match auto.as_str() {
+            "on" => upgrade::set_auto(true)?,
+            "off" => upgrade::set_auto(false)?,
+            "status" => {}
+            other => return Err(format!("--auto takes on, off or status, not `{other}`")),
+        }
+        println!(
+            "Automatic upgrades are {} on this machine.",
+            if upgrade::auto_on() { "on" } else { "off" }
+        );
+        if upgrade::auto_on() {
+            println!(
+                "A server here looks once a day, after its dream, and restarts itself. Sessions \
+                 here look about once a day, in the background."
+            );
+        }
+        if let Some(last) = upgrade::last_auto() {
+            println!("Last time: {last}");
+        }
+        return Ok(());
+    }
+    if args.switches.contains("--quiet") {
+        return upgrade::run_quiet();
+    }
     upgrade::run(
         args.switches.contains("--check"),
         args.switches.contains("--force"),

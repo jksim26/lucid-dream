@@ -84,6 +84,8 @@ fn without_number(title: &str) -> String {
 }
 
 pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
+    // Off unless the user turned it on; starts in the background and returns.
+    crate::upgrade::from_hook();
     let input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
     // The folder's name lets the server send this project's page with the index.
     let index = client.call(
@@ -481,7 +483,7 @@ fn wait_dir() -> Result<std::path::PathBuf, String> {
 }
 
 /// A private folder under `~/.lucid-dream` for this machine's own notes.
-fn state_dir(name: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn state_dir(name: &str) -> Result<std::path::PathBuf, String> {
     let home = ["HOME", "USERPROFILE"]
         .iter()
         .find_map(|key| std::env::var_os(key).filter(|v| !v.is_empty()))
@@ -510,7 +512,9 @@ pub fn wait(client: std::sync::Arc<Client>, input: &str, poll: Duration) -> Resu
     // background hooks before a `claude -p` run ends: waiting would hang it.
     if headless(
         std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
-        std::env::var("CLAUDE_CODE_SESSION_ATTENDED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
+            .ok()
+            .as_deref(),
     ) {
         return Ok(());
     }

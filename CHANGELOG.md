@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.18.0 (2026-11-14)
+
+- Automatic upgrades, off unless you turn them on. `lucid-dream upgrade --auto
+  on` (or `serve --auto-upgrade`) lets a machine upgrade itself: a server
+  looks once a day, half an hour after its dream, installs a newer release
+  and restarts in place; sessions look about once a day in the background,
+  and the next session runs the new version. `upgrade --auto status` shows
+  the switch and what the last automatic upgrade did.
+- An upgrade, automatic or by hand, now starts the downloaded program and
+  checks the version it reports before putting it in place. A download that
+  does not run changes nothing.
+
 ## 0.17.3 (2026-11-14)
 
 - `hook wait` returns at once in a headless session (`claude -p`, an Agent SDK
