@@ -506,6 +506,14 @@ fn state_dir(name: &str) -> Result<std::path::PathBuf, String> {
 /// Returns without waking when the session ends, when another waiter already
 /// serves the session, or when the server cannot be reached at the start.
 pub fn wait(client: std::sync::Arc<Client>, input: &str, poll: Duration) -> Result<(), String> {
+    // Nobody can be woken in a headless run, and Claude Code waits for
+    // background hooks before a `claude -p` run ends: waiting would hang it.
+    if headless(
+        std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_SESSION_ATTENDED").ok().as_deref(),
+    ) {
+        return Ok(());
+    }
     let input: Value = serde_json::from_str(input).map_err(|e| format!("bad hook input: {e}"))?;
     let id = crate::util::label(input["session_id"].as_str().unwrap_or(""));
     if id.is_empty() {
@@ -594,6 +602,14 @@ pub fn wait(client: std::sync::Arc<Client>, input: &str, poll: Duration) -> Resu
     }
 }
 
+/// Whether the session runs with no one to wake: `claude -p` (entrypoint
+/// `sdk-cli`), an Agent SDK program (`sdk-ts`, `sdk-py`), or any session
+/// Claude Code marks as unattended. A hook's stdin is never a terminal, so
+/// that says nothing here.
+fn headless(entrypoint: Option<&str>, attended: Option<&str>) -> bool {
+    entrypoint.is_some_and(|e| e.starts_with("sdk-")) || attended == Some("0")
+}
+
 /// What Claude is shown when a message wakes its session.
 fn wake_text(messages: &[&Value], number: Option<&str>) -> String {
     let session = number.map(|n| format!(" (#{n})")).unwrap_or_default();
@@ -673,6 +689,18 @@ pub fn session_end(client: &Client, input: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_headless_run_is_not_waited_on() {
+        // What `claude -p` 2.1.42 passes to its hooks (checked by hand).
+        assert!(headless(Some("sdk-cli"), Some("0")));
+        assert!(headless(Some("sdk-ts"), None));
+        assert!(headless(None, Some("0")));
+        // A terminal, desktop or phone session still waits to be woken.
+        assert!(!headless(Some("cli"), None));
+        assert!(!headless(Some("remote_mobile"), Some("1")));
+        assert!(!headless(None, None));
+    }
 
     const TRANSCRIPT: &str = r#"{"type":"user","message":{"role":"user","content":"Fix the   login bug"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Looking."},{"type":"tool_use","id":"1","name":"Read","input":{}}]}}
