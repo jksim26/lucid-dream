@@ -243,7 +243,7 @@ pub fn session_start(client: &Client, input: &str) -> Result<(), String> {
 }
 
 /// `input` is the JSON Claude Code passes a Stop hook on stdin.
-pub fn stop(client: &Client, input: &str) -> Result<(), String> {
+pub fn stop(client: &Client, input: &str, may_ask_for_title: bool) -> Result<(), String> {
     let started = std::time::Instant::now();
     let input: Value = serde_json::from_str(input).map_err(|e| format!("bad hook input: {e}"))?;
     let transcript = input["transcript_path"]
@@ -254,12 +254,13 @@ pub fn stop(client: &Client, input: &str) -> Result<(), String> {
     let mut nudge = None;
     if let Some(id) = input["session_id"].as_str().filter(|id| !id.is_empty()) {
         let number = client.call("check_in", who_i_am(&input)).ok();
-        let unattended = headless(
-            std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
-            std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
-                .ok()
-                .as_deref(),
-        );
+        let unattended = !may_ask_for_title
+            || headless(
+                std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
+                std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
+                    .ok()
+                    .as_deref(),
+            );
         if let (Some(number), false) = (number.filter(|n| !n.is_empty()), unattended) {
             // Asked once per session and number, so a session with no title
             // tool is not stopped after every turn.

@@ -1223,7 +1223,9 @@ fn hook(raw: Vec<String>) -> Result<(), String> {
             std::io::stdin()
                 .read_to_string(&mut input)
                 .map_err(|e| e.to_string())?;
-            hooks::stop(&client, &input)
+            // Only Claude Code has a session title to set, and only it is known
+            // to read a "block" from this hook the way the title request needs.
+            hooks::stop(&client, &input, agent.as_deref() != Some("codex"))
         }
         // Run with `asyncRewake`: waits for a message, then wakes the session.
         Some("wait") => {

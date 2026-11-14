@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.6 (2026-11-14)
+
+- The Stop hook's request for the session number in the title is made only
+  in Claude Code. A Codex session has no title to set and was never tested
+  with that request, so it is left alone.
+
 ## 0.18.5 (2026-11-14)
 
 - A Claude Code session whose title does not start with its session number
