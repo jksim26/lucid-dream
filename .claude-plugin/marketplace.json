@@ -9,7 +9,7 @@
     {
       "name": "lucid-dream",
       "description": "Shared memory and messaging across your agents.",
-      "version": "0.18.3",
+      "version": "0.18.4",
       "source": "./plugins/claude-code"
     }
   ]

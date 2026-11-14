@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.4 (2026-11-14)
+
+- The start text tells a Claude session to message another Claude session
+  with its app's own session messaging (`ListAgents`, then `SendMessage`)
+  first, and to use the lucid-dream `send` tool only when that fails or the
+  session is not listed there. Messages to grok, codex and chatgpt still go
+  through `send`.
+
 ## 0.18.3 (2026-11-14)
 
 - The start text says to replace a session number already in the title when

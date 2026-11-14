@@ -121,8 +121,11 @@ fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget:
              session's title: if it is one you must load first, load it; if you have none, \
              skip this. A title that starts with another number is out of date (a session gets \
              a new number when it comes back after ending): replace that number with this one. \
-             Tell the user the number if they ask which session this is. When you `send` a \
-             message, pass `from_session` \"{number}\".\n"
+             Tell the user the number if they ask which session this is.\n\nTo message another \
+             Claude session, use your app's own session messaging first (`ListAgents`, then \
+             `SendMessage`) if you have it. Use the lucid-dream `send` tool only when that \
+             fails or the session is not listed there, and for agents other than Claude (grok, \
+             codex, chatgpt). When you `send` a message, pass `from_session` \"{number}\".\n"
         ));
     }
     if let Some(messages) = messages {
@@ -796,6 +799,9 @@ mod tests {
         let memory = told.find("# MEMORY").unwrap();
         assert!(number < unread && unread < memory);
         assert!(told.contains("replace that number with this one"));
+        // Claude sessions reach each other through the app first.
+        let app = told.find("`ListAgents`, then `SendMessage`").unwrap();
+        assert!(app < told.find("lucid-dream `send` tool only when that fails").unwrap());
         assert!(told.contains("(more follows;"));
         // The page did not fit: the session is told which page to read.
         assert!(told.contains("# This project's page: wiki/big.md"));
