@@ -806,10 +806,18 @@ impl Store {
     ) -> Result<Sent, StoreError> {
         check_name("sender", from)?;
         check_name("recipient", to)?;
+        // Many sessions share one agent name. One of them may write to
+        // another, but only by its number, and never to itself.
         if from == to {
-            return Err(StoreError::Invalid(
-                "cannot send a message to yourself".into(),
-            ));
+            let mine = from_session.map(label).filter(|v| !v.is_empty());
+            let others = matches!(&audience, Audience::Sessions(sessions)
+                if !sessions.is_empty() && !sessions.iter().any(|s| Some(s) == mine.as_ref()));
+            if !others {
+                return Err(StoreError::Invalid(format!(
+                    "{to} is your own agent name. To message another of its sessions, name it \
+                     with `session` (its number in `who`); a session cannot message itself"
+                )));
+            }
         }
         let text = check_text(text)?;
         let (sessions, picked) = match audience {
@@ -912,7 +920,23 @@ impl Store {
             else {
                 continue;
             };
-            let addressed = message.from != who && (message.to == who || message.to == EVERYONE);
+            // A message from the reader's own agent is for it only when another
+            // session of that agent sent it to this session by number.
+            let from_sibling = message.from == who
+                && message.to == who
+                && !message.picked
+                && match (&message.session, session) {
+                    (Some(wanted), Some(mine)) => {
+                        wanted.split(',').any(|w| w == mine)
+                            && message.from_session.as_deref() != Some(mine)
+                    }
+                    _ => false,
+                };
+            let addressed = if message.from == who {
+                from_sibling
+            } else {
+                message.to == who || message.to == EVERYONE
+            };
             // A session the server picked may have ended before it read the
             // message; then the message is anyone's.
             let orphaned = |wanted: &str| message.picked && !around.contains(wanted);
@@ -1368,6 +1392,41 @@ mod message_tests {
         s.check_in(&p("claude", "a", true, later)).unwrap();
         assert_eq!(s.who(later).len(), 1);
         assert_eq!(s.check_in(&p("claude", "d", true, later)).unwrap(), "2");
+    }
+
+    #[test]
+    fn one_session_can_message_another_of_the_same_agent_by_number() {
+        let t = Temp::new();
+        let s = t.store();
+        let now = Utc::now();
+        let to = |sessions: &[&str]| {
+            Audience::Sessions(sessions.iter().map(|n| n.to_string()).collect())
+        };
+        // Session 5 writes to session 7 of the same agent.
+        s.send_for(
+            "claude",
+            Some("5"),
+            "claude",
+            to(&["7"]),
+            "title fixed",
+            None,
+            &now,
+        )
+        .unwrap();
+        let read = |session: Option<&str>| s.messages_for("claude", session, false, false).unwrap();
+        assert_eq!(read(Some("7")).len(), 1);
+        assert_eq!(read(Some("7"))[0].text.trim(), "title fixed");
+        // The sender does not get its own message back, nor does any other session.
+        assert!(read(Some("5")).is_empty());
+        assert!(read(Some("9")).is_empty());
+        assert!(read(None).is_empty());
+        // Not to itself, not to "all", and not without naming a session.
+        for audience in [to(&["5"]), to(&["5", "7"]), Audience::Every, Audience::Pick] {
+            let refused = s.send_for("claude", Some("5"), "claude", audience, "x", None, &now);
+            assert!(
+                matches!(refused, Err(StoreError::Invalid(why)) if why.contains("own agent name"))
+            );
+        }
     }
 
     #[test]

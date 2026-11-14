@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.2 (2026-11-14)
+
+- One session can message another session of the same agent: `send` to your
+  own agent name with `session` set to the other session's number. Before,
+  any message from claude to claude was refused, so Claude sessions could
+  not reach each other through the server. A session still cannot message
+  itself, and a message to your own agent must name the session.
+- The start text tells a session to load its title tool if it has to, so the
+  session number reaches the title where that tool is not loaded yet.
+
 ## 0.18.1 (2026-11-14)
 
 - Fixed: since 0.17.0 a session that started in a folder with a project page

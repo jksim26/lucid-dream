@@ -116,8 +116,10 @@ fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget:
     if let Some(number) = number {
         out.push_str(&format!(
             "\nThis session is #{number} in the lucid-dream `who` list; other agents reach it \
-             by that number. If you have a tool that sets this session's own title, keep \
-             \"#{number} \" at the start of it, followed by the topic (\"#{number} Login bug\"). \
+             by that number. Set this session's own title to \"#{number} \" followed by its topic \
+             (\"#{number} Login bug\") once the topic is clear, with the tool that sets a \
+             session's title: if it is one you must load first, load it; if you have none, \
+             skip this. \
              Tell the user the number if they ask which session this is. When you `send` a \
              message, pass `from_session` \"{number}\".\n"
         ));

@@ -204,7 +204,7 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "to": { "type": "string", "description": "The agent's name, e.g. claude, codex or grok, or \"all\" for every agent." },
+                    "to": { "type": "string", "description": "The agent's name, e.g. claude, codex or grok, or \"all\" for every agent. It may be your own agent name when `session` names another of its sessions." },
                     "text": { "type": "string" },
                     "re": { "type": "string", "description": "Path of the message this replies to, if any." },
                     "session": { "type": "string", "description": "Which session of that agent, by its number in `who`: one (\"3\"), several (\"1,3\"), or \"all\" for every session. Omit it and exactly one session gets the message: the one you are replying to if `re` is set, otherwise one that is listening now." },
