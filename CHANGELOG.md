@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.3 (2026-11-14)
+
+- `hook wait` returns at once in a headless session (`claude -p`, an Agent SDK
+  program, or any session Claude Code marks as unattended). Claude Code waits
+  for background hooks before a `claude -p` run ends, so with the wait hook
+  installed every headless run hung with no output.
+
 ## 0.17.2 (2026-11-13)
 
 - `upgrade` and `doctor` know when a release is minutes old and its files
