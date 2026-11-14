@@ -119,7 +119,8 @@ fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget:
              by that number. Set this session's own title to \"#{number} \" followed by its topic \
              (\"#{number} Login bug\") once the topic is clear, with the tool that sets a \
              session's title: if it is one you must load first, load it; if you have none, \
-             skip this. \
+             skip this. A title that starts with another number is out of date (a session gets \
+             a new number when it comes back after ending): replace that number with this one. \
              Tell the user the number if they ask which session this is. When you `send` a \
              message, pass `from_session` \"{number}\".\n"
         ));
@@ -794,6 +795,7 @@ mod tests {
         let unread = told.find("# Unread messages").unwrap();
         let memory = told.find("# MEMORY").unwrap();
         assert!(number < unread && unread < memory);
+        assert!(told.contains("replace that number with this one"));
         assert!(told.contains("(more follows;"));
         // The page did not fit: the session is told which page to read.
         assert!(told.contains("# This project's page: wiki/big.md"));

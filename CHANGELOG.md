@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.3 (2026-11-14)
+
+- The start text says to replace a session number already in the title when
+  it differs from the session's current one. A session that ends and comes
+  back gets a new number, and its title kept the old one.
+
 ## 0.18.2 (2026-11-14)
 
 - One session can message another session of the same agent: `send` to your
