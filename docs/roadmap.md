@@ -44,6 +44,10 @@ Everything ticked below is built, tested and running on a Windows PC and a Mac.
   trusted agents, a per-project off switch, a tighter scrub
 - [x] **21. Any agent** (added 2026-11-12): `import --auto`, `call` for agents with only
   a shell, `rule`, cloud agents bring their own memories over
+- [x] **22. Search that grows** (added 2026-11-16): queries split on spaces, the
+  half-the-words gate, a keyword index with stemming in `.lucid/index/`,
+  `reindex` and `search-eval`. Meaning search (embeddings) waits until the eval
+  shows misses only it would fix ([design](superpowers/specs/2026-11-16-search-design.md))
 
 Not done yet:
 
@@ -53,7 +57,6 @@ Not done yet:
 
 - [ ] Walk the Grok + ChatGPT + Codex guide from scratch on Windows and Linux
 - [ ] Try `install.ps1` and `setup` on Windows from scratch
-- [ ] Indexed full-text search, once scanning files gets slow
 - [ ] A session-start index with a size budget, as the memory grows
 
 ## Voice rules

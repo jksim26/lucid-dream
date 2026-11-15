@@ -146,6 +146,18 @@ lucid-dream upgrade
 lucid-dream uninstall
 ```
 
+The server keeps a search index of the memory in `.lucid/index/` inside the
+memory folder, refreshed from the files as they change. It is a copy: deleting
+it loses nothing. To rebuild it, stop the server and run:
+
+```bash
+lucid-dream reindex --root <memory folder>
+```
+
+To see how well search finds things in your own memory, write questions to
+`search-eval.tsv` in the memory folder (a query, a tab, then the paths that
+answer it) and run `lucid-dream search-eval --root <memory folder>`.
+
 To let a machine keep itself current, turn automatic upgrades on there:
 
 ```bash
@@ -186,9 +198,9 @@ memory is deliberately small and readable.
 
 Where lucid-dream is behind, so you know before you install it:
 
-- Search matches words, not meaning: it scans the Markdown files with no index,
-  entities or vectors. Dream adds links and alternative words to each page to
-  make up for part of that.
+- Search matches words, not meaning: a keyword index with English stemming
+  ("trading" finds "trade"), but no entities or vectors. Dream adds links and
+  alternative words to each page to make up for part of that.
 - Only Claude Code and Codex CLI sessions are recorded in full by a hook.
   Grok Bot and ChatGPT log a summary when they choose to. A picture is noted
   in the record, not stored.

@@ -97,6 +97,8 @@ pub struct Log<'a> {
 
 pub struct Store {
     root: PathBuf,
+    /// Search by reading every file, never through the index.
+    scan_only: bool,
 }
 
 /// One line, bounded: safe as a frontmatter value.
@@ -174,6 +176,19 @@ fn is_record(real: &Path) -> bool {
         .is_some_and(|name| name.to_string_lossy().to_lowercase().contains(".record.md"))
 }
 
+/// True for a file search reads: Markdown and plain text.
+fn searchable(file: &Path) -> bool {
+    file.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SEARCHABLE.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Why an indexed search failed: the caller's request, or the index itself.
+enum IndexedError {
+    Store(StoreError),
+    Index(String),
+}
+
 /// A session id reduced to what is safe in a file name.
 fn session_label(session: &str) -> Option<String> {
     let label: String = session
@@ -201,11 +216,32 @@ impl Store {
                 "memory root is not a directory",
             ));
         }
-        Ok(Store { root })
+        Ok(Store {
+            root,
+            scan_only: false,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The same store, searched by reading every file instead of through the
+    /// index (for `search-eval --engine scan`, and to compare the two).
+    pub fn scanning(mut self) -> Store {
+        self.scan_only = true;
+        self
+    }
+
+    /// Every searchable file in the store, as (relative path, real path).
+    pub fn searchable_files(&self) -> Result<Vec<(String, PathBuf)>, StoreError> {
+        let mut files = Vec::new();
+        self.walk(&self.root, &mut files)?;
+        Ok(files
+            .into_iter()
+            .filter(|f| searchable(f))
+            .map(|f| (self.rel(&f), f))
+            .collect())
     }
 
     /// Map a caller-supplied relative path to a real path inside the root.
@@ -446,6 +482,7 @@ impl Store {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
+        crate::index::changed();
         let mut file = fs::OpenOptions::new()
             .append(true)
             .create(true)
@@ -568,6 +605,7 @@ impl Store {
             opts.create_new(true);
         }
         opts.open(&path)?.write_all(body.as_bytes())?;
+        crate::index::changed();
         Ok(())
     }
 
@@ -621,6 +659,18 @@ impl Store {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
+        if !self.scan_only {
+            if let Some(index) = crate::index::for_root(&self.root) {
+                match self.indexed(&index, terms, dir, limit, deep, sealed) {
+                    Ok(found) => return Ok(found),
+                    // A path error is the caller's; anything else falls back to the scan.
+                    Err(IndexedError::Store(e)) => return Err(e),
+                    Err(IndexedError::Index(e)) => {
+                        eprintln!("lucid-dream: search index failed, scanning instead: {e}")
+                    }
+                }
+            }
+        }
         let working_only = dir.trim().is_empty() && !deep;
         let start = self.resolve(dir)?;
         let mut files = Vec::new();
@@ -629,11 +679,7 @@ impl Store {
         // (how many of the terms the file matched, its hits)
         let mut found: Vec<(usize, Vec<Hit>)> = Vec::new();
         for file in files {
-            let searchable = file
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| SEARCHABLE.contains(&e.to_ascii_lowercase().as_str()));
-            if !searchable || (sealed && is_record(&file)) {
+            if !searchable(&file) || (sealed && is_record(&file)) {
                 continue;
             }
             let rel = self.rel(&file);
@@ -670,6 +716,111 @@ impl Store {
         // Stable: files that match equally stay in path order.
         found.sort_by_key(|file| std::cmp::Reverse(file.0));
         Ok(found)
+    }
+
+    /// `scan`, answered from the index: the pieces that hold the terms are
+    /// grouped by file, each file's matching lines picked out, and files
+    /// ranked by how many of the terms they hold, then by their best piece.
+    fn indexed(
+        &self,
+        index: &crate::index::Index,
+        terms: &[String],
+        dir: &str,
+        limit: usize,
+        deep: bool,
+        sealed: bool,
+    ) -> Result<Vec<(usize, Vec<Hit>)>, IndexedError> {
+        let start = self.resolve(dir).map_err(IndexedError::Store)?;
+        // Looking for changed files means visiting every file, so it is done
+        // at most every few seconds, and at once after the server wrote one.
+        if index.due() {
+            let files = self.searchable_files().map_err(IndexedError::Store)?;
+            index.refresh(&files).map_err(IndexedError::Index)?;
+        }
+        let under = self.rel(&start);
+        let only_file = start.is_file().then(|| under.clone());
+        let folder = (!under.is_empty() && only_file.is_none()).then_some(under.as_str());
+        let scope = crate::index::Scope {
+            working_only: dir.trim().is_empty() && !deep,
+            sealed,
+            folder,
+        };
+        let pieces = index.search(terms, &scope).map_err(IndexedError::Index)?;
+        // Plain words also match by stem, so "trading" picks out a line with "trade".
+        let stemmed: Vec<Option<Vec<String>>> = terms
+            .iter()
+            .map(|t| {
+                t.chars()
+                    .all(char::is_alphanumeric)
+                    .then(|| index.stems(t))
+                    .filter(|s| !s.is_empty())
+            })
+            .collect();
+        struct File {
+            matched: Vec<bool>,
+            best: f32,
+            hits: Vec<Hit>,
+        }
+        let mut by_file: Vec<(String, File)> = Vec::new();
+        for piece in pieces {
+            if only_file.as_ref().is_some_and(|f| *f != piece.path) {
+                continue;
+            }
+            let at = match by_file.iter().position(|(p, _)| *p == piece.path) {
+                Some(at) => at,
+                None => {
+                    by_file.push((
+                        piece.path.clone(),
+                        File {
+                            matched: vec![false; terms.len()],
+                            best: piece.score,
+                            hits: Vec::new(),
+                        },
+                    ));
+                    by_file.len() - 1
+                }
+            };
+            let file = &mut by_file[at].1;
+            for (i, line) in piece.text.lines().enumerate() {
+                let lower = line.to_lowercase();
+                let mut line_stems: Option<Vec<String>> = None;
+                let mut hit = false;
+                for (n, term) in terms.iter().enumerate() {
+                    let found = lower.contains(term.as_str())
+                        || stemmed[n].as_ref().is_some_and(|stems| {
+                            let have = line_stems.get_or_insert_with(|| index.stems(line));
+                            stems.iter().all(|s| have.contains(s))
+                        });
+                    if found {
+                        file.matched[n] = true;
+                        hit = true;
+                    }
+                }
+                if hit {
+                    file.hits.push(Hit {
+                        path: piece.path.clone(),
+                        line: piece.line + i,
+                        text: line.trim().chars().take(MAX_HIT_CHARS).collect(),
+                    });
+                }
+            }
+        }
+        let mut ranked: Vec<(usize, f32, String, Vec<Hit>)> = by_file
+            .into_iter()
+            .filter(|(_, f)| !f.hits.is_empty())
+            .map(|(path, mut f)| {
+                f.hits.sort_by_key(|h| h.line);
+                f.hits.dedup_by_key(|h| h.line);
+                f.hits.truncate(limit);
+                (f.matched.iter().filter(|m| **m).count(), f.best, path, f.hits)
+            })
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.total_cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        Ok(ranked.into_iter().map(|(n, _, _, hits)| (n, hits)).collect())
     }
 }
 
@@ -1739,6 +1890,89 @@ pub mod tests {
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
         // z.md matches all three words, a.md one: z.md first despite its name.
         assert_eq!(paths, ["wiki/z.md", "wiki/z.md", "wiki/a.md"]);
+    }
+
+    #[test]
+    fn the_index_stems_keeps_ids_whole_and_follows_the_files() {
+        let t = Temp::new();
+        let s = t.store();
+        fs::create_dir_all(t.0.join("wiki")).unwrap();
+        fs::write(t.0.join("wiki/desk.md"), "# Desk\nWe trade at the open.\n").unwrap();
+        fs::write(t.0.join("wiki/prs.md"), "Merged PR #541 today.\nPR 54 too.\n").unwrap();
+        // Stemming: only the index finds "trade" for "trading".
+        let hits = s.search("trading", "", 10, false, false).unwrap();
+        assert_eq!((hits[0].path.as_str(), hits[0].line), ("wiki/desk.md", 2));
+        assert!(Store::open(&t.0)
+            .unwrap()
+            .scanning()
+            .search("trading", "", 10, false, false)
+            .unwrap()
+            .is_empty());
+        // An id matches whole.
+        let hits = s.search("#541", "", 10, false, false).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].line, 1);
+        // Changed and deleted files are followed.
+        fs::write(t.0.join("wiki/desk.md"), "Nothing here now.\n").unwrap();
+        assert!(s.search("trading", "", 10, false, false).unwrap().is_empty());
+        fs::remove_file(t.0.join("wiki/prs.md")).unwrap();
+        assert!(s.search("#541", "", 10, false, false).unwrap().is_empty());
+        assert!(t.0.join(".lucid/index/manifest.json").exists());
+    }
+
+    #[test]
+    fn index_and_scan_agree_on_plain_words() {
+        let t = Temp::new();
+        let s = t.store();
+        fs::create_dir_all(t.0.join("notes")).unwrap();
+        fs::create_dir_all(t.0.join("logs/2026-11-12")).unwrap();
+        fs::write(t.0.join("notes/a.md"), "alpha beta\ngamma\n# H\nbeta again\n").unwrap();
+        fs::write(t.0.join("notes/b.md"), "beta only\n").unwrap();
+        fs::write(t.0.join("logs/2026-11-12/c.md"), "alpha in a log\n").unwrap();
+        let scan = Store::open(&t.0).unwrap().scanning();
+        // The same lines; files that match equally may come in another order,
+        // since the index ranks them by relevance and the scan by name.
+        let lines = |hits: Vec<Hit>| -> Vec<(String, usize)> {
+            let mut lines: Vec<_> = hits.into_iter().map(|h| (h.path, h.line)).collect();
+            lines.sort();
+            lines
+        };
+        for (query, dir, deep) in [
+            ("alpha beta", "", false),
+            ("beta", "notes", false),
+            ("alpha", "", true),
+            ("alpha", "logs", false),
+            ("gamma", "notes/a.md", false),
+        ] {
+            assert_eq!(
+                lines(s.search(query, dir, 10, deep, false).unwrap()),
+                lines(scan.search(query, dir, 10, deep, false).unwrap()),
+                "{query} in {dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_index_is_rebuilt_and_a_locked_one_falls_back_to_the_scan() {
+        let t = Temp::new();
+        fs::create_dir_all(t.0.join("wiki")).unwrap();
+        fs::write(t.0.join("wiki/a.md"), "We trade daily.\n").unwrap();
+        fs::create_dir_all(t.0.join(".lucid/index")).unwrap();
+        fs::write(t.0.join(".lucid/index/manifest.json"), "not json").unwrap();
+        fs::write(t.0.join(".lucid/index/meta.json"), "garbage").unwrap();
+        let s = t.store();
+        assert_eq!(s.search("trading", "", 10, false, false).unwrap().len(), 1);
+        // Another process holding the writer: this one scans and still answers.
+        let root = fs::canonicalize(&t.0).unwrap();
+        let first = crate::index::for_root(&root).expect("the first opener writes");
+        let files = s.searchable_files().unwrap();
+        first.refresh(&files).unwrap();
+        let other = crate::index::Index::open(&root).map(|_| ());
+        assert!(other.is_err(), "a second writer must be refused");
+        // Rebuilding refuses too, and leaves the live index alone.
+        assert!(crate::index::rebuild(&root, &files).is_err());
+        assert!(root.join(".lucid/index/manifest.json").exists());
+        assert_eq!(s.search("trading", "", 10, false, false).unwrap().len(), 1);
     }
 
     #[test]

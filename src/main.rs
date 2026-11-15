@@ -9,6 +9,7 @@ mod eval;
 mod hooks;
 mod http;
 mod import;
+mod index;
 mod init;
 mod mcp;
 mod pair;
@@ -93,7 +94,11 @@ On any device:
   lucid-dream setup --codex --url URL [--plan]   connect the Codex CLI instead: adds the MCP
                                                 server to its config and the memory rule to
                                                 its AGENTS.md (token from LUCID_TOKEN_CODEX)
-  lucid-dream search-eval --root <dir> [--file F] score search on a question file
+  lucid-dream reindex --root <dir>               rebuild the search index from the memory files
+                                                (it lives in <root>/.lucid/index; deleting it
+                                                loses nothing)
+  lucid-dream search-eval --root <dir> [--file F] [--engine index|scan]
+                                                score search on a question file
                                                 (default <root>/search-eval.tsv: query, tab,
                                                 expected paths)
   lucid-dream doctor [--root <dir>] [--url URL]  check this machine's connection, hooks and
@@ -186,6 +191,7 @@ fn main() -> ExitCode {
         "uninstall" => cmd_uninstall(raw),
         "upgrade" => cmd_upgrade(raw),
         "search-eval" => cmd_search_eval(raw),
+        "reindex" => cmd_reindex(raw),
         "doctor" => return cmd_doctor(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
@@ -247,8 +253,12 @@ impl Args {
 
 /// `search-eval`: score search on the user's own question file.
 fn cmd_search_eval(raw: Vec<String>) -> Result<(), String> {
-    let args = Args::parse(raw, &["--root", "--file"], &[])?;
-    let store = args.store()?;
+    let args = Args::parse(raw, &["--root", "--file", "--engine"], &[])?;
+    let store = match args.option("--engine").as_deref() {
+        None | Some("index") => args.store()?,
+        Some("scan") => args.store()?.scanning(),
+        Some(other) => return Err(format!("unknown engine: {other} (use index or scan)")),
+    };
     let file = args
         .option("--file")
         .map(PathBuf::from)
@@ -256,6 +266,16 @@ fn cmd_search_eval(raw: Vec<String>) -> Result<(), String> {
     let questions = std::fs::read_to_string(&file)
         .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
     print!("{}", eval::run(&store, &questions)?);
+    Ok(())
+}
+
+/// `reindex`: rebuild the search index from the memory files.
+fn cmd_reindex(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root"], &[])?;
+    let store = args.store()?;
+    let files = store.searchable_files().map_err(|e| e.to_string())?;
+    let pieces = index::rebuild(store.root(), &files)?;
+    println!("indexed {} files in {pieces} pieces", files.len());
     Ok(())
 }
 

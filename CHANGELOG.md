@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.20.0 (2026-11-16)
+
+- Search uses a keyword index instead of reading every file. It lives in
+  `.lucid/index/` in the memory folder, is built from the Markdown files and
+  refreshed as they change, and deleting it loses nothing. On a copy of the
+  memory 30 times today's size, deep searches ran about 20 times faster.
+- English stemming: "trading" finds "trade". Ids, paths and versions such as
+  `#541`, `src/store.rs` and `0.19.0` still match only whole.
+- Files that hold the same number of the words are ranked by how relevant
+  they are, not by name.
+- Only one process writes the index. Another one on the same folder (a
+  `serve --stdio` beside the server) searches by reading the files, as
+  before. A broken index is rebuilt; if it cannot be used, search reads the
+  files.
+- `lucid-dream reindex --root <dir>` rebuilds the index (stop the server
+  first). `lucid-dream search-eval --root <dir>` scores search on your own
+  questions in `search-eval.tsv` in the memory folder; on 40 real questions
+  it finds 39 (0.19.0: 37, 0.18.6: 2).
+
 ## 0.19.0 (2026-11-16)
 
 - `search` splits a query on spaces as well as commas, so "Kronos Chronos C2
