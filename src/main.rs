@@ -5,6 +5,7 @@ mod channel;
 mod client;
 mod doctor;
 mod dream;
+mod eval;
 mod hooks;
 mod http;
 mod import;
@@ -92,6 +93,9 @@ On any device:
   lucid-dream setup --codex --url URL [--plan]   connect the Codex CLI instead: adds the MCP
                                                 server to its config and the memory rule to
                                                 its AGENTS.md (token from LUCID_TOKEN_CODEX)
+  lucid-dream search-eval --root <dir> [--file F] score search on a question file
+                                                (default <root>/search-eval.tsv: query, tab,
+                                                expected paths)
   lucid-dream doctor [--root <dir>] [--url URL]  check this machine's connection, hooks and
                                                 version, and the store when given; changes
                                                 nothing
@@ -181,6 +185,7 @@ fn main() -> ExitCode {
         "setup" => cmd_setup(raw),
         "uninstall" => cmd_uninstall(raw),
         "upgrade" => cmd_upgrade(raw),
+        "search-eval" => cmd_search_eval(raw),
         "doctor" => return cmd_doctor(raw),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
@@ -238,6 +243,20 @@ impl Args {
         let root = self.root()?;
         Store::open(&root).map_err(|e| format!("cannot open memory store {}: {e}", root.display()))
     }
+}
+
+/// `search-eval`: score search on the user's own question file.
+fn cmd_search_eval(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(raw, &["--root", "--file"], &[])?;
+    let store = args.store()?;
+    let file = args
+        .option("--file")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| store.root().join("search-eval.tsv"));
+    let questions = std::fs::read_to_string(&file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    print!("{}", eval::run(&store, &questions)?);
+    Ok(())
 }
 
 fn env(key: &str) -> Option<String> {
