@@ -134,6 +134,27 @@ fn slug(name: &str) -> String {
         .join("-")
 }
 
+/// The terms of a search query: lowercased, split on commas and whitespace,
+/// with text in double quotes kept as one term. Empty and repeated terms are
+/// dropped, so the count is what the half-the-words gate counts.
+pub fn query_terms(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    let mut add = |term: &str| {
+        let term = term.trim().to_lowercase();
+        if !term.is_empty() && !terms.contains(&term) {
+            terms.push(term);
+        }
+    };
+    for (i, part) in query.split('"').enumerate() {
+        if i % 2 == 1 {
+            add(part);
+        } else {
+            part.split(|c: char| c == ',' || c.is_whitespace()).for_each(&mut add);
+        }
+    }
+    terms
+}
+
 /// True for a file in the deeper layer: the archive, session logs, messages.
 pub fn is_deep(rel: &str) -> bool {
     let rel = rel.to_lowercase();
@@ -551,10 +572,11 @@ impl Store {
     }
 
     /// Case-insensitive text search under `dir`. `query` may hold several
-    /// alternatives separated by commas ("release, deploy, ship"); a line
-    /// matches when it contains any of them, and files that match more of
-    /// them come first. With no `dir` and `deep` false, only working memory
-    /// is searched: the archive, logs and messages are the deeper layer.
+    /// words or alternatives separated by spaces or commas ("release deploy
+    /// ship"), with a phrase in double quotes kept whole; a line matches when
+    /// it contains any of them, and files that match more of them come
+    /// first. With no `dir` and `deep` false, only working memory is
+    /// searched: the archive, logs and messages are the deeper layer.
     pub fn search(
         &self,
         query: &str,
@@ -563,12 +585,39 @@ impl Store {
         deep: bool,
         sealed: bool,
     ) -> Result<Vec<Hit>, StoreError> {
-        let lowered = query.to_lowercase();
-        let terms: Vec<&str> = lowered
-            .split(',')
-            .map(str::trim)
-            .filter(|term| !term.is_empty())
-            .collect();
+        let terms = query_terms(query);
+        let found = self.scan(&terms, dir, limit, deep, sealed)?;
+        Ok(found
+            .into_iter()
+            .flat_map(|(_, hits)| hits)
+            .take(limit)
+            .collect())
+    }
+
+    /// True when working memory answers `query`: one of its files holds at
+    /// least half of the query's terms, rounded up. A file that has only one
+    /// common word out of several does not count, so the deeper layer is not
+    /// held back by it.
+    pub fn working_answers(&self, query: &str, sealed: bool) -> Result<bool, StoreError> {
+        let terms = query_terms(query);
+        if terms.is_empty() {
+            return Ok(false);
+        }
+        let needed = terms.len().div_ceil(2);
+        let found = self.scan(&terms, "", 1, false, sealed)?;
+        Ok(found.first().is_some_and(|(matched, _)| *matched >= needed))
+    }
+
+    /// Every file under `dir` that holds any of `terms`, with how many of the
+    /// terms it holds and up to `limit` of its matching lines, best first.
+    fn scan(
+        &self,
+        terms: &[String],
+        dir: &str,
+        limit: usize,
+        deep: bool,
+        sealed: bool,
+    ) -> Result<Vec<(usize, Vec<Hit>)>, StoreError> {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -601,7 +650,7 @@ impl Store {
                 let line_lower = line.to_lowercase();
                 let mut hit = false;
                 for (n, term) in terms.iter().enumerate() {
-                    if line_lower.contains(term) {
+                    if line_lower.contains(term.as_str()) {
                         matched[n] = true;
                         hit = true;
                     }
@@ -620,11 +669,7 @@ impl Store {
         }
         // Stable: files that match equally stay in path order.
         found.sort_by_key(|file| std::cmp::Reverse(file.0));
-        Ok(found
-            .into_iter()
-            .flat_map(|(_, hits)| hits)
-            .take(limit)
-            .collect())
+        Ok(found)
     }
 }
 
@@ -1679,8 +1724,13 @@ pub mod tests {
             "Release rule: deploy after tests.\nWe ship it then.\n",
         )
         .unwrap();
+        // Words separated by spaces count one by one.
+        let hits = s.search("deploy policy", "", 10, false, false).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "wiki/z.md");
+        // A quoted phrase is matched whole.
         assert!(s
-            .search("deploy policy", "", 10, false, false)
+            .search("\"deploy policy\"", "", 10, false, false)
             .unwrap()
             .is_empty());
         let hits = s
@@ -1689,6 +1739,30 @@ pub mod tests {
         let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
         // z.md matches all three words, a.md one: z.md first despite its name.
         assert_eq!(paths, ["wiki/z.md", "wiki/z.md", "wiki/a.md"]);
+    }
+
+    #[test]
+    fn query_terms_split_on_spaces_commas_and_keep_quotes() {
+        assert_eq!(query_terms("Kronos Chronos, C2"), ["kronos", "chronos", "c2"]);
+        assert_eq!(
+            query_terms("\"pull request 541\" ship"),
+            ["pull request 541", "ship"]
+        );
+        assert!(query_terms(" , \"\" ,,").is_empty());
+        assert_eq!(query_terms("a A\ta"), ["a"]);
+    }
+
+    #[test]
+    fn working_memory_answers_only_with_half_the_words() {
+        let t = Temp::new();
+        let s = t.store();
+        fs::create_dir_all(t.0.join("wiki")).unwrap();
+        fs::write(t.0.join("wiki/zoo.md"), "The zebra lives here.\n").unwrap();
+        assert!(s.working_answers("zebra", false).unwrap());
+        assert!(s.working_answers("zebra okapi", false).unwrap());
+        assert!(!s.working_answers("zebra okapi giraffe", false).unwrap());
+        assert!(!s.working_answers("okapi", false).unwrap());
+        assert!(!s.working_answers(" , ", false).unwrap());
     }
 
     #[test]

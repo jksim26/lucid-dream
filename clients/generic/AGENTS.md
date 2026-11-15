@@ -11,9 +11,9 @@ program in a shell; each call prints its answer.
   `lucid-dream call read '{"path": "wiki/<page>.md"}'`.
 - To look something up, run
   `lucid-dream call search '{"query": "release, deploy, ship"}'`. It matches
-  words, not meaning, so give several likely words separated by commas. Add
+  words, not meaning, so give several likely words separated by spaces or commas. Add
   `"deep": true` to include the archive, session logs and messages; the server
-  goes there only when working memory has no match for the same words, or
+  goes there only when working memory matches fewer than half of the words, or
   when you add a `"reason"` saying why you need the original detail.
 - When you learn something a future session would want (a decision, a
   correction, a preference, a fact about a project), run

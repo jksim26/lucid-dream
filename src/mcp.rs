@@ -18,13 +18,15 @@ const DEEP_REASON: &str =
     "The deeper layer was searched too, for the reason you gave (noted in the log).";
 const DEEP_EMPTY: &str =
     "Working memory has no match for these words, so these come from the deeper layer.";
+const DEEP_WEAK: &str = "Working memory matches fewer than half of these words, so the \
+deeper layer was searched too.";
 
 /// The most of a project's page that comes with the index, in characters.
 const MAX_PROJECT_PAGE: usize = 12_000;
 
 /// What a search gets back when it asked for the deeper layer and was not let in.
 const DEEP_HELD: &str =
-    "Working memory has matches for these words, so the deeper layer (archive, \
+    "Working memory has matches for at least half of these words, so the deeper layer (archive, \
 session logs, messages) was not searched. The working-memory matches are below. For the detail \
 behind one, `read` the file it points to. To search deeper anyway, call again with a `reason` \
 saying why working memory is not enough.";
@@ -38,9 +40,9 @@ to that bear on the task. `search` when the question is about the user, their pr
 something decided or done before, and the index does not already answer it; general knowledge \
 and ordinary coding questions need no search. `search` looks in working memory \
 (the index, notes, wiki pages and notes not yet merged); give it several likely words separated \
-by commas, since it matches words, not meaning. The archive, session logs and \
-messages are a deeper layer: `deep` true reaches them, but only when working memory has no match \
-for the same words, or when you give a `reason` saying why you need the original detail. To get \
+by spaces or commas, since it matches words, not meaning. The archive, session logs and \
+messages are a deeper layer: `deep` true reaches them, but only when working memory matches fewer than half the words, \
+or when you give a `reason` saying why you need the original detail. To get \
 the detail behind a working-memory result, `read` the file it points to; that is always allowed.\n\n\
 Write: call `remember` when you learn something a future session would want: a decision, a \
 correction, a preference, a fact about a project. Use your judgement about what is worth \
@@ -153,7 +155,7 @@ fn tools() -> Value {
         },
         {
             "name": "search",
-            "description": "Case-insensitive text search of working memory: the index, notes, wiki pages and notes not yet merged. It matches words, not meaning, so give several likely words separated by commas (\"release, deploy, ship\"); files matching more of them come first. Returns path:line: text for each match.",
+            "description": "Case-insensitive text search of working memory: the index, notes, wiki pages and notes not yet merged. It matches words, not meaning, so give several likely words separated by spaces or commas (\"release deploy ship\"), with a phrase in double quotes to match it whole; files matching more of them come first. Returns path:line: text for each match.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -410,7 +412,7 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                     if hits.is_empty() && dir.trim().is_empty() && !deep {
                         return Ok(
                             "no matches in working memory; try other words separated by \
-                               commas, or search again with deep true to include the archive, \
+                               spaces or commas, or search again with deep true to include the archive, \
                                session logs and messages"
                                 .to_string(),
                         );
@@ -426,11 +428,13 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                             let _ = store.deep_searched(who, &query, &reason, &Utc::now());
                             return Ok(format!("{DEEP_REASON}\n\n{}", lines(&hits)));
                         }
-                        let working = store.search(&query, "", limit, false, sealed)?;
-                        if !working.is_empty() {
+                        if store.working_answers(&query, sealed)? {
+                            let working = store.search(&query, "", limit, false, sealed)?;
                             return Ok(format!("{DEEP_HELD}\n\n{}", lines(&working)));
                         }
-                        return Ok(format!("{DEEP_EMPTY}\n\n{}", lines(&hits)));
+                        let working = store.search(&query, "", 1, false, sealed)?;
+                        let why = if working.is_empty() { DEEP_EMPTY } else { DEEP_WEAK };
+                        return Ok(format!("{why}\n\n{}", lines(&hits)));
                     }
                     Ok(lines(&hits))
                 })
@@ -930,6 +934,14 @@ mod tests {
         let deep = search(json!({ "query": "okapi", "deep": true }));
         assert!(deep.starts_with("Working memory has no match"));
         assert!(deep.contains("\n\narchive/old.md:1:"));
+        // One word of three in working memory is not an answer: deep runs.
+        let weak = search(json!({ "query": "zebra okapi giraffe", "deep": true }));
+        assert!(weak.starts_with("Working memory matches fewer than half"));
+        assert!(weak.contains("archive/old.md:1:"));
+        // One of two is half: held.
+        let held = search(json!({ "query": "zebra okapi", "deep": true }));
+        assert!(held.starts_with("Working memory has matches"));
+        assert!(!held.contains("archive/"));
         // A reason opens it, and is written down with the agent's name.
         let why = "need the original wording";
         let deep = search(json!({ "query": "zebra", "deep": true, "reason": why }));

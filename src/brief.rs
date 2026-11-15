@@ -27,7 +27,7 @@ pub fn grok(address: &str, code: &str) -> String {
          Standing instruction: at the start of a conversation load `index` and check \
          `messages`. Use `remember` for anything worth keeping, with `said_by` set to \"user\" \
          only for things I decided or stated myself. When you look something up, give `search` \
-         several likely words separated by commas, and set `deep` to true if working memory \
+         several likely words separated by spaces or commas, and set `deep` to true if working memory \
          has no answer. When I show you a picture or a file, say in one line what it shows, \
          since pictures are not stored. Nothing logs your conversations for you, so when a piece of work is \
          finished call `log` with a short summary: what I asked, what you did, what was \
@@ -65,9 +65,9 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          - list (dir, optional string): lists memory files.\n\
          - read (path, string; from_line, optional integer; lines, optional integer): reads \
          one memory file, or part of a large one.\n\
-         - search (query, string: one or several words separated by commas; deep, optional \
+         - search (query, string: one or several words separated by spaces or commas; deep, optional \
          boolean: also search the archive, session logs and messages, which the server allows \
-         only when working memory has no match or a reason is given; reason, optional string: \
+         only when working memory matches fewer than half the words or a reason is given; reason, optional string: \
          why working memory is not enough; dir, optional string; \
          limit, optional integer): searches memory.\n\
          - log (summary, string): records a short summary of a finished piece of work.\n\
@@ -88,7 +88,7 @@ pub fn chatgpt(address: &str, code: &str) -> String {
          Also save this to your memory as a standing instruction for when you use the Lucid \
          Dream relay: load `index` first; use `remember` for anything worth keeping, with \
          `said_by` \"user\" only for things I decided or stated myself; give `search` several \
-         likely words separated by commas, with `deep` true if working memory has no answer; \
+         likely words separated by spaces or commas, with `deep` true if working memory has no answer; \
          and when a piece of work is finished call `log` with a short summary of what I \
          asked, what you did and what was decided. When I show you a picture or a file, say \
          in one line what it shows, since pictures are not stored.\n\

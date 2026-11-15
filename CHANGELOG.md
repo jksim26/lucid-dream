@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.0 (2026-11-16)
+
+- `search` splits a query on spaces as well as commas, so "Kronos Chronos C2
+  candle" looks for each word instead of the whole phrase. A phrase in
+  double quotes is still matched whole. Before, a query written as plain
+  words found nothing unless that exact phrase was in a file.
+- The deep-search gate counts working memory as having an answer only when
+  one of its files holds at least half of the query's words. With words now
+  counted one by one, a common word would nearly always match something and
+  keep the deeper layer shut. When deep search runs past weaker matches, it
+  says so. A `reason` still opens the deeper layer as before.
+
 ## 0.18.6 (2026-11-14)
 
 - The Stop hook's request for the session number in the title is made only
