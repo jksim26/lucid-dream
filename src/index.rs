@@ -105,32 +105,47 @@ pub struct Index {
     state: Mutex<(IndexWriter, Manifest)>,
     /// When the files were last looked at, and the write count then.
     looked: Mutex<Option<(Instant, u64)>>,
+    /// Held while this process uses the index; released when it is dropped.
+    _lock: fs::File,
 }
 
-/// The index of each memory root this process has opened, or `None` when it
-/// could not be opened, so a failure is not retried on every search.
-fn opened() -> &'static Mutex<HashMap<PathBuf, Option<Arc<Index>>>> {
-    static OPENED: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<Index>>>>> = OnceLock::new();
+/// How long a process that could not open the index scans before it tries
+/// again (the other process may have stopped).
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+
+/// Each memory root's index in this process: the index, or the time opening
+/// it failed, so a failure is not retried on every search.
+type Opened = HashMap<PathBuf, Result<Arc<Index>, Instant>>;
+
+fn opened() -> &'static Mutex<Opened> {
+    static OPENED: OnceLock<Mutex<Opened>> = OnceLock::new();
     OPENED.get_or_init(Default::default)
 }
 
 /// The index for `root`, opened once per process. `None` means search scans.
 pub fn for_root(root: &Path) -> Option<Arc<Index>> {
     let mut opened = opened().lock().unwrap_or_else(|e| e.into_inner());
-    opened
-        .entry(root.to_path_buf())
-        .or_insert_with(|| match Index::open(root) {
-            Ok(index) => Some(Arc::new(index)),
-            Err(e) => {
-                // Another process writing the index is normal (a server and a
-                // stdio server on one folder); only a real failure is reported.
-                if !e.starts_with(BUSY) {
-                    eprintln!("lucid-dream: search index not used, scanning instead: {e}");
-                }
-                None
+    match opened.get(root) {
+        Some(Ok(index)) => return Some(index.clone()),
+        Some(Err(failed)) if failed.elapsed() < RETRY_AFTER => return None,
+        _ => {}
+    }
+    match Index::open(root) {
+        Ok(index) => {
+            let index = Arc::new(index);
+            opened.insert(root.to_path_buf(), Ok(index.clone()));
+            Some(index)
+        }
+        Err(e) => {
+            // Another process writing the index is normal (a server and a
+            // stdio server on one folder); only a real failure is reported.
+            if !e.starts_with(BUSY) {
+                eprintln!("lucid-dream: search index not used, scanning instead: {e}");
             }
-        })
-        .clone()
+            opened.insert(root.to_path_buf(), Err(Instant::now()));
+            None
+        }
+    }
 }
 
 /// Delete and rebuild the index for `root` from its files.
@@ -222,6 +237,19 @@ pub fn pieces(text: &str) -> Vec<(usize, String)> {
 impl Index {
     pub(crate) fn open(root: &Path) -> Result<Index, String> {
         let dir = index_dir(root);
+        // The lock sits beside the index, not in it, so it is taken before
+        // anything in the index is read, wiped or written, and a second
+        // process never touches an index another one is using.
+        let lucid = root.join(".lucid");
+        fs::create_dir_all(&lucid).map_err(|e| format!("{}: {e}", lucid.display()))?;
+        let lock_path = lucid.join("index.lock");
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        lock.try_lock().map_err(|e| format!("{BUSY} ({e})"))?;
         let (schema, fields) = schema();
         let manifest_path = dir.join("manifest.json");
         let manifest = fs::read_to_string(&manifest_path)
@@ -288,19 +316,24 @@ impl Index {
             stemmer: Mutex::new(stemmer),
             state: Mutex::new((writer, files)),
             looked: Mutex::new(None),
+            _lock: lock,
         })
     }
 
-    /// True when it is time to look at the files again; the caller then
-    /// calls `refresh`.
-    pub fn due(&self) -> bool {
-        let mut looked = self.looked.lock().unwrap_or_else(|e| e.into_inner());
+    /// When it is time to look at the files again, the count of the
+    /// server's writes so far; the caller refreshes and then passes it to
+    /// `looked`. Until a refresh succeeds, every search looks again.
+    pub fn due(&self) -> Option<u64> {
+        let looked = self.looked.lock().unwrap_or_else(|e| e.into_inner());
         let writes = WRITES.load(Ordering::Relaxed);
-        let due = looked.is_none_or(|(at, seen)| seen != writes || at.elapsed() >= LOOK_EVERY);
-        if due {
-            *looked = Some((Instant::now(), writes));
-        }
-        due
+        looked
+            .is_none_or(|(at, seen)| seen != writes || at.elapsed() >= LOOK_EVERY)
+            .then_some(writes)
+    }
+
+    /// The files were looked at, with `writes` of the server's writes seen.
+    pub fn looked(&self, writes: u64) {
+        *self.looked.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), writes));
     }
 
     /// Bring the index up to date with `files` (relative path, real path):
@@ -387,7 +420,8 @@ impl Index {
     }
 
     /// The pieces that hold any of `terms` within `scope`, best first.
-    pub fn search(&self, terms: &[String], scope: &Scope) -> Result<Vec<Found>, String> {
+    /// `None` when no term has a word to look up.
+    pub fn search(&self, terms: &[String], scope: &Scope) -> Result<Option<Vec<Found>>, String> {
         let f = self.fields;
         let words = |field: Field, tokens: Vec<String>| -> Option<Box<dyn Query>> {
             let mut terms: Vec<Term> = tokens
@@ -415,7 +449,7 @@ impl Index {
             }
         }
         if any.is_empty() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let flag = |field: Field, value: u64| -> (Occur, Box<dyn Query>) {
             let term = Term::from_field_u64(field, value);
@@ -453,7 +487,7 @@ impl Index {
                 score,
             });
         }
-        Ok(found)
+        Ok(Some(found))
     }
 }
 

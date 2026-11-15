@@ -187,6 +187,7 @@ fn searchable(file: &Path) -> bool {
 enum IndexedError {
     Store(StoreError),
     Index(String),
+    NoWords,
 }
 
 /// A session id reduced to what is safe in a file name.
@@ -482,7 +483,6 @@ impl Store {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        crate::index::changed();
         let mut file = fs::OpenOptions::new()
             .append(true)
             .create(true)
@@ -498,6 +498,7 @@ impl Store {
         }
         file.write_all(part.trim().as_bytes())?;
         file.write_all(b"\n\n")?;
+        crate::index::changed();
         Ok(rel)
     }
 
@@ -668,6 +669,7 @@ impl Store {
                     Err(IndexedError::Index(e)) => {
                         eprintln!("lucid-dream: search index failed, scanning instead: {e}")
                     }
+                    Err(IndexedError::NoWords) => {}
                 }
             }
         }
@@ -733,9 +735,10 @@ impl Store {
         let start = self.resolve(dir).map_err(IndexedError::Store)?;
         // Looking for changed files means visiting every file, so it is done
         // at most every few seconds, and at once after the server wrote one.
-        if index.due() {
+        if let Some(writes) = index.due() {
             let files = self.searchable_files().map_err(IndexedError::Store)?;
             index.refresh(&files).map_err(IndexedError::Index)?;
+            index.looked(writes);
         }
         let under = self.rel(&start);
         let only_file = start.is_file().then(|| under.clone());
@@ -745,7 +748,11 @@ impl Store {
             sealed,
             folder,
         };
-        let pieces = index.search(terms, &scope).map_err(IndexedError::Index)?;
+        // Terms with no word in them (punctuation alone) are left to the scan,
+        // which matches any text.
+        let Some(pieces) = index.search(terms, &scope).map_err(IndexedError::Index)? else {
+            return Err(IndexedError::NoWords);
+        };
         // Plain words also match by stem, so "trading" picks out a line with "trade".
         let stemmed: Vec<Option<Vec<String>>> = terms
             .iter()
@@ -1918,6 +1925,24 @@ pub mod tests {
         fs::remove_file(t.0.join("wiki/prs.md")).unwrap();
         assert!(s.search("#541", "", 10, false, false).unwrap().is_empty());
         assert!(t.0.join(".lucid/index/manifest.json").exists());
+    }
+
+    #[test]
+    fn a_second_opener_never_wipes_an_index_in_use_and_punctuation_is_scanned() {
+        let t = Temp::new();
+        fs::create_dir_all(t.0.join("wiki")).unwrap();
+        fs::write(t.0.join("wiki/a.md"), "We trade (daily).\n").unwrap();
+        let root = fs::canonicalize(&t.0).unwrap();
+        // Freshly opened, nothing committed yet, so no manifest.
+        let first = crate::index::Index::open(&root).unwrap();
+        assert!(crate::index::Index::open(&root).is_err());
+        let s = t.store();
+        first.refresh(&s.searchable_files().unwrap()).unwrap();
+        assert!(root.join(".lucid/index/manifest.json").exists());
+        drop(first);
+        // A term with no word in it is matched by the scan.
+        let hits = s.search("(", "", 10, false, false).unwrap();
+        assert!(hits.iter().any(|h| h.path == "wiki/a.md"));
     }
 
     #[test]
