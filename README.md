@@ -292,6 +292,49 @@ The endpoint is `http://<pc-name>:7878/mcp`. `/health` answers `ok` without a
 token. For a client on the same machine, `serve --stdio --as <agent>` speaks MCP
 over stdio instead.
 
+## Watch the PC from another machine
+
+The PC's own health checks cannot say that the PC is off. `lucid-dream watchdog` runs on a second
+machine (a Mac, say), polls the addresses you give it, and posts one line to Slack or Telegram when
+one has failed twice in a row, and one line when it answers again. A line that could not be
+delivered is tried again on the next run.
+
+On that machine:
+
+1. Install lucid-dream (`install.sh`, or `lucid-dream upgrade`).
+2. Put the alert address in `~/.config/lucid-dream/watchdog.env` and make it private
+   (`chmod 600`). Use a Slack incoming webhook, or a Telegram bot token and chat id, or both:
+
+   ```
+   LUCID_ALERT_SLACK_URL=https://hooks.slack.com/services/...
+   LUCID_ALERT_TELEGRAM_TOKEN=...
+   LUCID_ALERT_TELEGRAM_CHAT=...
+   ```
+
+3. Check the checks and the channel by hand. `--test-alert` sends one line and stops:
+
+   ```bash
+   CHECKS=pc=http://<pc-name>:7878/health,n8n=http://<pc-name>:5678/healthz
+   lucid-dream watchdog --check $CHECKS --test-alert
+   lucid-dream watchdog --check $CHECKS
+   ```
+
+4. Run it every minute under launchd:
+
+   ```bash
+   lucid-dream watchdog --check $CHECKS --print-plist > ~/Library/LaunchAgents/com.lucid-dream.watchdog.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lucid-dream.watchdog.plist
+   ```
+
+   Stop it with `launchctl bootout gui/$(id -u)/com.lucid-dream.watchdog`. Output goes to
+   `~/Library/Logs/lucid-dream-watchdog.log`, and only when a check fails or an alert goes out.
+
+A check is healthy when its address answers with a 2xx status. `--fails N` sets how many failed
+runs in a row make an incident (default 2). The state is kept in
+`~/.local/state/lucid-dream/watchdog.json` (`--state` moves it), and `--env-file` points at a
+different env file. The alert addresses are never accepted on the command line and never appear in
+the plist or in any message the command prints.
+
 ## Connect the agents
 
 - Claude Code, with hooks: [clients/claude-code](clients/claude-code)

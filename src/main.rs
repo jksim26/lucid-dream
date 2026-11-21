@@ -19,6 +19,7 @@ mod tokens;
 mod trust;
 mod upgrade;
 mod util;
+mod watchdog;
 mod webhook;
 
 use std::collections::{HashMap, HashSet};
@@ -130,6 +131,17 @@ On any device:
   lucid-dream rule [--mcp]                       print the rule to paste into an agent's
                                                 instructions file (AGENTS.md and the like)
   lucid-dream who [--root <dir> | --url URL]    List the agents and their sessions
+  lucid-dream watchdog --check pc=http://<pc>:7878/health[,n8n=http://<pc>:5678/healthz]
+                       [--fails 2] [--state FILE] [--env-file FILE]
+                                                for a machine other than the one it watches:
+                                                poll those addresses once, and post one line to
+                                                Slack or Telegram when one has failed twice in a
+                                                row, and one when it answers again. Run it every
+                                                minute (`--print-plist` prints the launchd
+                                                agent; `--test-alert` sends a test line).
+                                                Alert addresses and tokens: LUCID_ALERT_SLACK_URL,
+                                                LUCID_ALERT_TELEGRAM_TOKEN + _CHAT, from the
+                                                environment or the env file
   lucid-dream channel [--url URL]               Claude Code channel: pushes new messages
                                                 into a running session (research preview)
 
@@ -185,6 +197,7 @@ fn main() -> ExitCode {
         "webhook" => cmd_webhook(raw),
         "channel" => cmd_channel(raw),
         "who" => cmd_who(raw),
+        "watchdog" => cmd_watchdog(raw),
         "trust" => cmd_trust(raw),
         "record" => cmd_record(raw),
         "setup" => cmd_setup(raw),
@@ -281,6 +294,75 @@ fn cmd_reindex(raw: Vec<String>) -> Result<(), String> {
 
 fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// `watchdog`: one pass of the checks, for a scheduler to run every minute.
+fn cmd_watchdog(raw: Vec<String>) -> Result<(), String> {
+    let args = Args::parse(
+        raw.clone(),
+        &["--check", "--fails", "--state", "--env-file"],
+        &["--print-plist", "--test-alert"],
+    )?;
+    let checks = watchdog::parse_checks(&args.option("--check").ok_or("watchdog needs --check")?)?;
+    let home = env("HOME")
+        .or_else(|| env("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or("no home folder (HOME is not set)")?;
+    if args.switches.contains("--print-plist") {
+        let bin = std::env::current_exe().map_err(|e| e.to_string())?;
+        let rest: Vec<String> = raw.into_iter().filter(|a| a != "--print-plist").collect();
+        let log = home.join("Library/Logs/lucid-dream-watchdog.log");
+        print!(
+            "{}",
+            watchdog::launchd_plist(&bin.to_string_lossy(), &rest, &log.to_string_lossy())
+        );
+        return Ok(());
+    }
+    let env_file = args
+        .option("--env-file")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config/lucid-dream/watchdog.env"));
+    let from_file = match std::fs::read_to_string(&env_file) {
+        Ok(text) => watchdog::parse_env_file(&text),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound && args.option("--env-file").is_none() =>
+        {
+            HashMap::new()
+        }
+        Err(e) => return Err(format!("cannot read {}: {e}", env_file.display())),
+    };
+    let alerts =
+        watchdog::Alerts::from_lookup(|key| env(key).or_else(|| from_file.get(key).cloned()))?;
+    if args.switches.contains("--test-alert") {
+        alerts.send("lucid-dream watchdog: test line, the alert channel works")?;
+        println!("test line sent");
+        return Ok(());
+    }
+    let fails = match args.option("--fails") {
+        None => watchdog::DEFAULT_FAILS,
+        Some(n) => n
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n >= 1)
+            .ok_or("--fails must be a whole number, 1 or more")?,
+    };
+    let config = watchdog::Config {
+        checks,
+        fails,
+        state_path: args
+            .option("--state")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/state/lucid-dream/watchdog.json")),
+        alerts,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    for line in watchdog::run_once(&config, now)? {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn cmd_init(raw: Vec<String>) -> Result<(), String> {
