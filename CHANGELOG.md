@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0 (2026-11-21)
+
+- `lucid-dream watchdog` for a second machine that watches the PC: it polls
+  `/health` (and any other address, such as n8n's `/healthz`) and posts one
+  line to Slack or Telegram when a check has failed twice in a row, and one
+  when it answers again. `--print-plist` prints the launchd agent that runs it
+  every minute; `--test-alert` sends a test line. Alert addresses come from
+  the environment or an env file, never the command line. See "Watch the PC
+  from another machine" in the README.
+
 ## 0.20.0 (2026-11-16)
 
 - Search uses a keyword index instead of reading every file. It lives in
