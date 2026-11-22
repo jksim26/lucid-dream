@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.22.0 (2026-11-22)
+
+- Lessons, the missing procedural memory. `remember` takes an optional `kind`:
+  `fact` (the default) or `lesson`, for a rule learned from something that went
+  wrong. A lesson note carries `kind: lesson`; any other value is refused.
+- `lessons.md` at the root of the memory folder holds the rules every agent
+  follows (`## Rules`) and the candidates on probation. `lucid-dream init`
+  creates it; the dream creates it in an existing store.
+- `index` now returns the rules after `MEMORY.md` and before the project page,
+  cut at 3,000 characters. The session-start text shows them whole and cuts the
+  index first if room is short.
+- Dream promotes a candidate to a rule at 2 incidents and 14 days on
+  probation (the user's own rules skip probation), keeps at most 20 rules,
+  retires the weakest and stale candidates to `archive/lessons.md`, and names
+  lessons that code could enforce in the digest. After committing it warns when
+  the rules pass 20 or 3,000 characters.
+
 ## 0.21.0 (2026-11-21)
 
 - `lucid-dream watchdog` for a second machine that watches the PC: it polls

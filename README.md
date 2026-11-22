@@ -227,6 +227,20 @@ Anthropic's [The components of agent memory](https://www.anthropic.com/research/
 | What is loaded ahead of a session | `MEMORY.md`, the index, kept under 200 lines |
 | Lower layers, read or searched when needed | `search` covers working memory; `deep` adds the archive, logs and messages, and the server allows it only when working memory matches fewer than half the words or the agent gives a reason |
 
+Memory has four types, one place each:
+
+| Type | What it is | Where it lives |
+| --- | --- | --- |
+| Working | the live session | the agent's own context |
+| Episodic | what happened | `logs/`, `messages/`, `archive/` |
+| Semantic | facts and decisions | `notes/`, `wiki/`, `MEMORY.md` |
+| Procedural | how to work: lessons learnt | `lessons.md`, loaded with the index |
+
+An agent saves a lesson with `remember` and `kind` set to `lesson`. Dream turns a
+candidate into a rule once it has two incidents and two weeks on probation (a rule
+you stated yourself skips probation), keeps at most 20 rules, and retires the
+weakest to `archive/lessons.md`.
+
 Memory has layers, and only the top one is loaded. The index points to
 pages; pages link to each other and say where the finer detail is; the
 archive and the session records hold everything, unbounded, and are looked
@@ -252,6 +266,7 @@ this repo**: this repo is public, and the store holds your notes.
 | `digest/` | Daily digest of what changed | Dream |
 | `archive/` | Processed and replaced notes; nothing is hard-deleted | Dream |
 | `MEMORY.md` | The index loaded at session start (under 200 lines) | Dream |
+| `lessons.md` | The rules every agent follows, learned from things that went wrong; `## Rules` loads with the index, `## On probation` holds candidates | Dream |
 | `open-questions.md` | Your own conflicting decisions, awaiting your call | Dream |
 | `.lucid/` | Token hashes, trusted messengers, who has seen which message, session check-ins; ignored by git | `token add`, server |
 
