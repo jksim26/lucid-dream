@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 
+use crate::store::{lesson_rules, LESSONS, MAX_RULES, MAX_RULES_CHARS};
 use crate::util::{git, Utc};
 
 const PROMPT: &str = include_str!("dream_prompt.md");
@@ -401,6 +402,17 @@ fn dream(root: &Path, dry_run: bool) -> Result<String, String> {
     }
     if index_lines > INDEX_LINE_LIMIT {
         eprintln!("warning: MEMORY.md is {index_lines} lines; sessions load only the first {INDEX_LINE_LIMIT}");
+    }
+    if let Ok(text) = fs::read_to_string(root.join(LESSONS)) {
+        let rules = lesson_rules(&text);
+        let chars: usize = rules.iter().map(|r| r.chars().count() + 1).sum();
+        if rules.len() > MAX_RULES || chars > MAX_RULES_CHARS {
+            eprintln!(
+                "warning: lessons.md has {} rules, {chars} characters; keep it to \
+                 {MAX_RULES} rules and {MAX_RULES_CHARS} characters, or sessions are shown only the start",
+                rules.len()
+            );
+        }
     }
     if !restored.is_empty() {
         eprintln!(

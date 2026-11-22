@@ -4,6 +4,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::store::LESSONS;
 use crate::util::git;
 
 const FOLDERS: [&str; 7] = [
@@ -16,6 +17,9 @@ keep it under 200 lines.\nEach line points at a note or wiki page.\n\n<!-- empty
 const OPEN_QUESTIONS: &str =
     "# Open questions\n\nDecisions of yours that conflict with each other. \
 Dream lists them here; you settle them.\n\n<!-- none yet -->\n";
+
+const LESSONS_TEMPLATE: &str = "# Lessons\n\nRules every agent follows, learned from things that went wrong. \
+Dream keeps this file. At most 20 rules.\n\n## Rules\n\n<!-- none yet -->\n\n## On probation\n\n<!-- none yet -->\n";
 
 /// `.lucid/` holds the token hashes; it never goes into git.
 const GITIGNORE: &str = ".lucid/\n.DS_Store\n";
@@ -38,6 +42,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir.join(".lucid")).map_err(io)?;
     for (name, text) in [
         ("MEMORY.md", MEMORY),
+        (LESSONS, LESSONS_TEMPLATE),
         ("open-questions.md", OPEN_QUESTIONS),
         (".gitignore", GITIGNORE),
         (".gitattributes", GITATTRIBUTES),
@@ -72,8 +77,14 @@ mod tests {
         assert!(dir.join(".git").is_dir() && dir.join("inbox/.gitkeep").exists());
         assert!(git(&dir, &["check-ignore", ".lucid/tokens"]).is_ok());
 
+        let fresh = fs::read_to_string(dir.join("lessons.md")).unwrap();
+        assert!(fresh.contains("## Rules\n\n<!-- none yet -->") && fresh.contains("## On probation"));
+        assert!(crate::store::lesson_rules(&fresh).is_empty());
+
         fs::write(dir.join("MEMORY.md"), "mine\n").unwrap();
+        fs::write(dir.join("lessons.md"), "# Lessons\n\n## Rules\n\n- Mine.\n").unwrap();
         run(&dir).unwrap();
+        assert!(fs::read_to_string(dir.join("lessons.md")).unwrap().contains("- Mine."));
         let store = Store::open(&dir).unwrap();
         assert_eq!(store.read("MEMORY.md").unwrap(), "mine\n");
         let files: Vec<String> = store
@@ -82,6 +93,6 @@ mod tests {
             .into_iter()
             .map(|e| e.path)
             .collect();
-        assert_eq!(files, ["MEMORY.md", "open-questions.md"]);
+        assert_eq!(files, ["MEMORY.md", "lessons.md", "open-questions.md"]);
     }
 }

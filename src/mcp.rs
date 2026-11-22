@@ -3,7 +3,10 @@
 
 use serde_json::{json, Value};
 
-use crate::store::{Audience, Log, Note, Presence, Remembered, Store, StoreError, EVERYONE, INDEX};
+use crate::store::{
+    lesson_rules, Audience, Log, Note, NoteKind, Presence, Remembered, Store, StoreError, EVERYONE,
+    INDEX, LESSONS, MAX_RULES_CHARS,
+};
 use crate::tokens::{self, Tokens};
 use crate::trust;
 use crate::util::{label, unix_now, Utc};
@@ -20,6 +23,9 @@ const DEEP_EMPTY: &str =
     "Working memory has no match for these words, so these come from the deeper layer.";
 const DEEP_WEAK: &str = "Working memory matches fewer than half of these words, so the \
 deeper layer was searched too.";
+
+/// Where the index reply turns from MEMORY.md to the lessons.
+pub const LESSONS_MARK: &str = "\n\n# Lessons (lessons.md)\n\n";
 
 /// The most of a project's page that comes with the index, in characters.
 const MAX_PROJECT_PAGE: usize = 12_000;
@@ -48,7 +54,7 @@ Write: call `remember` when you learn something a future session would want: a d
 correction, a preference, a fact about a project. Use your judgement about what is worth \
 keeping. Set said_by to \"user\" only for something the user themself decided or stated; leave \
 it out for your own view. You cannot edit memory directly: notes go to an inbox and a nightly \
-dream job merges them. When the user shows you a picture or a file, say in one line what it \
+dream job merges them. Pass kind \"lesson\" for a rule learned from something that went wrong, that every agent should follow. When the user shows you a picture or a file, say in one line what it \
 shows: pictures are not stored, so your words are all that memory keeps. If nothing logs your sessions for you (Claude Code does it with a hook), \
 call `log` before you finish a piece of work, with a short summary of what was asked, what you \
 did and what was decided.\n\n\
@@ -178,7 +184,8 @@ fn tools() -> Value {
                     "text": { "type": "string", "description": "The note, in plain Markdown." },
                     "said_by": { "type": "string", "description": "\"user\" if the user decided or stated this themself. Omit for your own observation or opinion." },
                     "topic": { "type": "string", "description": "A few words naming the subject, e.g. the project or tool." },
-                    "origin": { "type": "string", "description": "Where it came from, e.g. a file path or URL." }
+                    "origin": { "type": "string", "description": "Where it came from, e.g. a file path or URL." },
+                    "kind": { "type": "string", "enum": ["fact", "lesson"], "description": "\"lesson\" for a rule learned from something that went wrong, that every agent should follow; omit for anything else." }
                 },
                 "required": ["text"]
             },
@@ -332,6 +339,28 @@ pub fn who_is_around(store: &Store, me: &str) -> String {
     out
 }
 
+/// The rules of `lessons.md` as a block for the index reply; empty when there
+/// is no file or no rules. Cut on a whole line at `MAX_RULES_CHARS`.
+fn lessons_block(store: &Store) -> String {
+    let Ok(text) = store.read(LESSONS) else {
+        return String::new();
+    };
+    let rules = lesson_rules(&text).join("\n");
+    if rules.is_empty() {
+        return String::new();
+    }
+    let mut shown: String = rules.chars().take(MAX_RULES_CHARS).collect();
+    let cut = if shown.len() < rules.len() {
+        if let Some(end) = shown.rfind('\n') {
+            shown.truncate(end);
+        }
+        format!("\n\n(cut here; `read` {LESSONS} for the rest)")
+    } else {
+        String::new()
+    };
+    format!("{LESSONS_MARK}Rules the user's agents learned from things that went wrong; follow them.\n\n{shown}{cut}")
+}
+
 fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     // Session records hold everything a session said and did. Through a
@@ -351,6 +380,14 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
 
     let outcome: Result<String, StoreError> = match name {
         "index" => store.read(INDEX).map(|index| {
+            // The user's agents' hard-won rules sit between the index and the
+            // project page: they work only if they are in front of the agent.
+            let lessons = lessons_block(store);
+            let index = if lessons.is_empty() {
+                index
+            } else {
+                format!("{}{lessons}", index.trim_end())
+            };
             // The page about the project the session works in comes with the
             // index, so the agent need not work out that it should look.
             match store.project_page(&text("project"), sealed) {
@@ -448,16 +485,19 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
                     "said_by must be \"user\" or your own name ({who})"
                 )))
             } else {
-                let note = Note {
-                    source: who,
-                    said_by,
-                    text: &body,
-                    topic: optional("topic"),
-                    origin: optional("origin"),
-                };
-                store.remember(&note, &Utc::now()).map(|done| match done {
-                    Remembered::New(path) => format!("remembered: {path}"),
-                    Remembered::Duplicate(path) => format!("already remembered: {path}"),
+                NoteKind::parse(optional("kind")).and_then(|kind| {
+                    let note = Note {
+                        source: who,
+                        said_by,
+                        kind,
+                        text: &body,
+                        topic: optional("topic"),
+                        origin: optional("origin"),
+                    };
+                    store.remember(&note, &Utc::now()).map(|done| match done {
+                        Remembered::New(path) => format!("remembered: {path}"),
+                        Remembered::Duplicate(path) => format!("already remembered: {path}"),
+                    })
                 })
             }
         }
@@ -614,6 +654,7 @@ fn call_tool(store: &Store, who: &str, door: bool, params: &Value) -> Result<Val
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::store::tests::Temp;
 
     fn call(store: &Store, who: &str, name: &str, args: Value) -> Value {
@@ -719,6 +760,88 @@ mod tests {
             json!({ "text": "Ship Friday.", "said_by": "user" }),
         );
         assert!(text(&again).starts_with("already remembered: "));
+    }
+
+    #[test]
+    fn remember_kind_lesson_is_written_to_the_note() {
+        let t = Temp::new();
+        let s = t.store();
+        let lesson = call(
+            &s,
+            "claude",
+            "remember",
+            json!({ "text": "Redeem the code first.", "kind": "lesson" }),
+        );
+        let path = text(&lesson).strip_prefix("remembered: ").unwrap().to_string();
+        let body = s.read(&path).unwrap();
+        let (head, _) = body.split_once("\n---\n").unwrap();
+        assert!(head.contains("\nat: ") && head.contains("\nkind: lesson"));
+        assert!(head.find("at: ").unwrap() < head.find("kind: lesson").unwrap());
+
+        for kind in [json!({}), json!({ "kind": "fact" })] {
+            let mut args = json!({ "text": format!("Plain note {kind}.") });
+            args.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
+            let plain = call(&s, "claude", "remember", args);
+            let path = text(&plain).strip_prefix("remembered: ").unwrap().to_string();
+            assert!(!s.read(&path).unwrap().contains("kind:"));
+        }
+    }
+
+    #[test]
+    fn remember_refuses_another_kind() {
+        let t = Temp::new();
+        let reply = call(
+            &t.store(),
+            "claude",
+            "remember",
+            json!({ "text": "x", "kind": "rule" }),
+        );
+        assert_eq!(reply["isError"], true);
+        assert!(t.store().list("inbox").is_err());
+    }
+
+    fn index_of(s: &Store) -> String {
+        text(&call(s, "claude", "index", json!({}))).to_string()
+    }
+
+    fn with_lessons(t: &Temp, lessons: &str) -> Store {
+        fs::write(t.0.join("lessons.md"), lessons).unwrap();
+        t.store()
+    }
+
+    #[test]
+    fn index_carries_the_rules_and_not_the_probation_list() {
+        let t = Temp::new();
+        let s = with_lessons(
+            &t,
+            "# Lessons\n\n## Rules\n\n- Redeem first. Why: lockout.\n- Run tests.\n\n## On probation\n\n- Maybe this.\n",
+        );
+        let index = index_of(&s);
+        let memory = index.find("# MEMORY").unwrap();
+        let block = index.find("# Lessons (lessons.md)").unwrap();
+        assert!(memory < block);
+        assert!(index.contains("- Redeem first. Why: lockout.\n- Run tests."));
+        assert!(!index.contains("Maybe this."));
+    }
+
+    #[test]
+    fn index_is_unchanged_without_rules() {
+        let t = Temp::new();
+        let plain = index_of(&t.store());
+        assert!(!plain.contains("Lessons"));
+        let s = with_lessons(&t, "# Lessons\n\n## Rules\n\n<!-- none yet -->\n\n## On probation\n\n- Only a candidate.\n");
+        assert_eq!(index_of(&s), plain);
+    }
+
+    #[test]
+    fn index_cuts_the_rules_at_the_limit() {
+        let t = Temp::new();
+        let rule = format!("- {}\n", "w".repeat(98));
+        let s = with_lessons(&t, &format!("## Rules\n\n{}", rule.repeat(40)));
+        let index = index_of(&s);
+        let shown = index.matches("- www").count();
+        assert!(shown > 20 && shown < 40, "{shown}");
+        assert!(index.contains("(cut here; `read` lessons.md for the rest)"));
     }
 
     #[test]

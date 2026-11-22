@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::client::Client;
-use crate::store::{Note, Remembered, Store, MAX_NOTE_BYTES};
+use crate::store::{Note, NoteKind, Remembered, Store, MAX_NOTE_BYTES};
 use crate::util::Utc;
 
 const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
@@ -71,6 +71,7 @@ pub fn run(paths: &[String], sink: &Sink, said_by: &str) -> Result<Report, Strin
                 let note = Note {
                     source,
                     said_by,
+                    kind: NoteKind::Fact,
                     text: &text,
                     topic: Some(&topic),
                     origin: Some(&origin),

@@ -14,6 +14,27 @@ use crate::util::{label, sha256_hex, valid_name, Utc};
 
 /// The index every agent loads at session start.
 pub const INDEX: &str = "MEMORY.md";
+/// The rules every agent follows, learned from things that went wrong.
+pub const LESSONS: &str = "lessons.md";
+/// Most rules `lessons.md` may hold; dream keeps to it, and the guard warns above it.
+pub const MAX_RULES: usize = 20;
+/// Most characters of rules a session is shown, and the guard's limit.
+pub const MAX_RULES_CHARS: usize = 3_000;
+
+/// The bullet lines under `## Rules` in the text of `lessons.md`: each line
+/// that starts with `- `, up to the next `## ` heading. Probation is not read.
+pub fn lesson_rules(text: &str) -> Vec<&str> {
+    let mut in_rules = false;
+    let mut rules = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            in_rules = line.trim_end() == "## Rules";
+        } else if in_rules && line.starts_with("- ") {
+            rules.push(line);
+        }
+    }
+    rules
+}
 
 const MAX_READ_BYTES: u64 = 256 * 1024;
 pub const MAX_NOTE_BYTES: usize = 64 * 1024;
@@ -70,12 +91,34 @@ pub struct Hit {
     pub text: String,
 }
 
+/// What a note is. A lesson is a rule learned from something that went wrong;
+/// dream reads those as candidates for `lessons.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteKind {
+    Fact,
+    Lesson,
+}
+
+impl NoteKind {
+    /// `fact` (also when absent) or `lesson`; anything else is refused.
+    pub fn parse(kind: Option<&str>) -> Result<NoteKind, StoreError> {
+        match kind {
+            None | Some("fact") => Ok(NoteKind::Fact),
+            Some("lesson") => Ok(NoteKind::Lesson),
+            Some(other) => Err(StoreError::Invalid(format!(
+                "kind must be \"fact\" or \"lesson\", not {other:?}"
+            ))),
+        }
+    }
+}
+
 /// A raw note for the inbox. `source` is the agent that recorded it; `said_by`
 /// is whose statement it is: "user" for the user's own decision, otherwise the
 /// agent's name for its own opinion.
 pub struct Note<'a> {
     pub source: &'a str,
     pub said_by: &'a str,
+    pub kind: NoteKind,
     pub text: &'a str,
     pub topic: Option<&'a str>,
     pub origin: Option<&'a str>,
@@ -415,6 +458,9 @@ impl Store {
             note.said_by,
             now.iso()
         );
+        if note.kind == NoteKind::Lesson {
+            body.push_str("kind: lesson\n");
+        }
         for (key, value) in [("topic", note.topic), ("origin", note.origin)] {
             if let Some(value) = value.map(field).filter(|v| !v.is_empty()) {
                 body.push_str(&format!("{key}: {value}\n"));
@@ -1752,10 +1798,19 @@ pub mod tests {
         assert_eq!(paths, ["MEMORY.md", "notes/rust.md"]);
     }
 
+    #[test]
+    fn rules_are_the_bullets_under_the_rules_heading_only() {
+        let text = "# Lessons\n\n- not a rule: before the heading\n\n## Rules\n\n- One.\n  wrapped text\n* star bullet\n-no space\n- Two.\n<!-- none yet -->\n\n## On probation\n\n- Candidate.\n\n## Rules extra\n\n- Nope.\n";
+        assert_eq!(lesson_rules(text), ["- One.", "- Two."]);
+        assert!(lesson_rules("## Rules\n\n<!-- none yet -->\n").is_empty());
+        assert!(lesson_rules("").is_empty());
+    }
+
     fn note<'a>(source: &'a str, said_by: &'a str, text: &'a str) -> Note<'a> {
         Note {
             source,
             said_by,
+            kind: NoteKind::Fact,
             text,
             topic: Some("lang\nx: y"),
             origin: None,

@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::client::Client;
+use crate::mcp::LESSONS_MARK;
 use crate::util::redact;
 
 const MAX_PROMPTS: usize = 20;
@@ -176,9 +177,18 @@ fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget:
                        for the pages it points to, `search` only for something about the user or \
                        their projects that the index does not answer, and `remember` for \
                        anything a future session should know.\n";
+    // The lessons are rules to follow, so they are shown whole and the index
+    // gives way to them, not the other way round.
+    let (index, lessons) = match index.split_once(LESSONS_MARK) {
+        Some((index, lessons)) => (index.trim(), Some(lessons.trim())),
+        None => (index, None),
+    };
+    let lessons_block = lessons
+        .map(|rules| format!("{LESSONS_MARK}{rules}\n"))
+        .unwrap_or_default();
     // Room is kept for the line that names the project's page.
     let kept = if page.is_some() { 400 } else { 0 };
-    let room = budget.saturating_sub(out.len() + USE.len() + kept + 100);
+    let room = budget.saturating_sub(out.len() + USE.len() + lessons_block.len() + kept + 100);
     let shown = fitting(index, room);
     out.push('\n');
     out.push_str(shown);
@@ -186,6 +196,7 @@ fn start_text(reply: &str, number: Option<&str>, messages: Option<&str>, budget:
         out.push_str("\n(the index is cut here; call the lucid-dream `index` tool for all of it)");
     }
     out.push_str(USE);
+    out.push_str(&lessons_block);
     if let Some(page) = page {
         // The reply gives the page's path, a line about it, then the page.
         let (path, body) = page.split_once('\n').unwrap_or((page, ""));
@@ -870,6 +881,19 @@ mod tests {
         let told = start_text(reply, None, None, START_BUDGET);
         assert!(told.contains("- a line") && told.ends_with("Kickoff 16 Nov.\n"));
         assert!(!told.contains("too long") && !told.contains("This session is"));
+
+        // The lessons are shown whole, ahead of the page, even when the index is cut for them.
+        let rules = "- Redeem first.\n".repeat(150);
+        let long = format!("# MEMORY\n{}", "- a long line of the index\n".repeat(900));
+        let reply = format!(
+            "{long}{LESSONS_MARK}{rules}\n\n# This project's page: wiki/p.md\n\nIt matches.\n\nShort page."
+        );
+        let told = start_text(&reply, Some("2"), None, START_BUDGET);
+        assert!(told.len() <= START_BUDGET, "{}", told.len());
+        assert!(told.contains("(the index is cut here;"));
+        assert_eq!(told.matches("- Redeem first.").count(), 150);
+        assert!(told.find("# Lessons (lessons.md)").unwrap() < told.find("# This project's page").unwrap());
+        assert!(told.ends_with("Short page.\n"));
 
         // An index too long for the budget is cut on a line, and says so.
         let long = format!("# MEMORY\n{}", "- a long line of the index\n".repeat(900));
