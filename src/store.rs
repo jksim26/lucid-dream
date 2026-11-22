@@ -97,6 +97,10 @@ pub struct Hit {
 pub enum NoteKind {
     Fact,
     Lesson,
+    /// A lesson that came through a door from an agent the user has not
+    /// named trusted. The server sets this, never the caller, so dream can
+    /// hold it to probation whatever its `said_by` claims.
+    LessonViaDoor,
 }
 
 impl NoteKind {
@@ -458,8 +462,10 @@ impl Store {
             note.said_by,
             now.iso()
         );
-        if note.kind == NoteKind::Lesson {
-            body.push_str("kind: lesson\n");
+        match note.kind {
+            NoteKind::Fact => {}
+            NoteKind::Lesson => body.push_str("kind: lesson\n"),
+            NoteKind::LessonViaDoor => body.push_str("kind: lesson\nvia: door\n"),
         }
         for (key, value) in [("topic", note.topic), ("origin", note.origin)] {
             if let Some(value) = value.map(field).filter(|v| !v.is_empty()) {
