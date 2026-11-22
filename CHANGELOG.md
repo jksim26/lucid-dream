@@ -16,6 +16,10 @@
   retires the weakest and stale candidates to `archive/lessons.md`, and names
   lessons that code could enforce in the digest. After committing it warns when
   the rules pass 20 or 3,000 characters.
+- A lesson sent through a door by an agent the user has not named trusted is
+  marked `via: door` by the server, and the dream holds it to probation
+  whatever its `said_by` says, so no outside agent can write straight into
+  the rules every session loads.
 
 ## 0.21.0 (2026-11-21)
 
